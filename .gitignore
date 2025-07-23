@@ -1,0 +1,17 @@
+.vscode/
+_build/
+
+venv/
+.env/
+__pycache__/
+*.pyc
+*.pyo
+
+*.log
+*.tmp
+
+*.o
+*.out
+#*.exe
+*.so
+*.dll

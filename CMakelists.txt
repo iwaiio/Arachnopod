@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.17)
+project(Arachnopod01)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# set(CMAKE_PROJECT_sim_POSTFIX "_sim")
+# set(CMAKE_PROJECT_board_POSTFIX "_board")
+
+add_subdirectory(software/sim)
+# add_subdirectory(software/board)

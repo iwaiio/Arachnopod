@@ -1,9 +1,14 @@
 .vscode/
-_build/
 
-venv/
-.env/
-__pycache__/
+**/board/
+
+**/_build/
+**/bin/
+**/lib/
+
+*/venv/
+*/.env/
+*/__pycache__/
 *.pyc
 *.pyo
 
@@ -12,6 +17,6 @@ __pycache__/
 
 *.o
 *.out
-#*.exe
+*.exe
 *.so
 *.dll

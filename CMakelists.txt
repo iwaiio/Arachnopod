@@ -1,11 +1,23 @@
 cmake_minimum_required(VERSION 3.17)
-project(Arachnopod VERSION 0.0.1 LANGUAGES CXX)
+project(Arachnopod VERSION 0.0.7 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# set(CMAKE_PROJECT_sim_POSTFIX "_sim")
-# set(CMAKE_PROJECT_board_POSTFIX "_board")
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_subdirectory(software/sim)
-# add_subdirectory(software/board)
+option(ARACHNOPOD_BUILD_SIM   "Build simulation targets" ON)
+option(ARACHNOPOD_BUILD_BOARD "Build board-side targets" OFF)
+option(ARACHNOPOD_BUILD_COMMON    "Build common targets" OFF)
+
+if(ARACHNOPOD_BUILD_COMMON)
+  add_subdirectory(software/common)
+endif()
+
+if(ARACHNOPOD_BUILD_SIM)
+  add_subdirectory(software/sim)
+endif()
+
+if(ARACHNOPOD_BUILD_BOARD)
+  add_subdirectory(software/board)
+endif()

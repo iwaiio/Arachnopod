@@ -127,6 +127,15 @@ def get_by_header(row: list[Any], header_map: dict[str, int], *names: str, defau
             return row[idx]
     return default
 
+def ensure_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
+def get_by_header(row: list[Any], header_map: dict[str, int], *names: str, default: Any = None) -> Any:
+    for name in names:
+        idx = header_map.get(normalize_header(name))
+        if idx is not None and idx < len(row):
+            return row[idx]
+    return default
 
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
@@ -454,10 +463,15 @@ def ordered_unique(values: list[str], head: str = "NONE") -> list[str]:
 def collect_systems(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
     return ordered_unique([*(x.system_name for x in params), *(x.system_name for x in commands)], "NONE")
 
+def collect_algorithms(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
+    return ordered_unique([*map(lambda x: x.alg_name, params), *map(lambda x: x.alg_name, commands)])
 
 def collect_algs(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
     return ordered_unique([*(x.alg_name for x in params), *(x.alg_name for x in commands)], "NONE")
 
+def collect_types(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
+    preset = ["NONE", "D", "A", "AP", "SIGN", "UNSIGN"]
+    used = {sanitize_identifier(x) for x in preset}
 
 def collect_types(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
     base = ["NONE", "D", "A", "AP", "SIGN", "UNSIGN"]
@@ -646,6 +660,7 @@ def make_sys_list(
 
     return make_define_file(items, "SYS_max", len(filtered) + 2)
 
+    return make_define_file(items, "SYS_max", len(systems))
 
 def make_alg_list(algs: list[str]) -> str:
     items = []
@@ -738,6 +753,10 @@ def make_param_tab(params: list[ParamRow]) -> str:
     lines.append("")
     return "\n".join(lines)
 
+    lines.extend(align_rows(init_rows, comments, commas))
+    lines.append(pad140("};"))
+    lines.append("")
+    return "\n".join(lines)
 
 def make_command_tab(commands: list[CommandRow]) -> str:
     lines = [

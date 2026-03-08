@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 import math
 import re
 import sys
@@ -15,46 +15,57 @@ from openpyxl import load_workbook
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SOFTWARE_DIR = SCRIPT_DIR.parent
-EXCEL_PATH = SOFTWARE_DIR / "data_base" / "bd.xlsx"
+EXCEL_PATH = SOFTWARE_DIR / "data_base" / "BD.xlsx"
 OUTPUT_DIR = SOFTWARE_DIR / "generated"
 
-
-# -----------------------------------------------------------------------------
-# helpers
-# -----------------------------------------------------------------------------
-
-def die(msg: str) -> None:
-    print(f"error: {msg}", file=sys.stderr)
-    sys.exit(1)
+LINE_WIDTH = 140
+BLOCK_BITS = 16
+TAR_NONE = 0
 
 
-def ensure_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
+def fail(message: str) -> None:
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def warn(message: str) -> None:
+    print(f"warning: {message}")
+
+
+def error_log(message: str) -> None:
+    print(f"error: {message}", file=sys.stderr)
+
+
+def info(message: str) -> None:
+    print(f"info: {message}")
 
 
 def normalize_header(value: Any) -> str:
     if value is None:
         return ""
-    s = str(value).strip()
-    s = s.replace("*", "")
-    s = s.replace(" ", "_")
-    return s.lower()
+    text = str(value).strip().lower().replace("*", "").replace(" ", "_")
+    return text
 
 
-def make_header_map(headers: Sequence[Any]) -> Dict[str, int]:
-    return {normalize_header(h): idx for idx, h in enumerate(headers)}
+def sanitize_identifier(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    text = text.replace("Ё", "Е")
+    text = re.sub(r"[^A-Z0-9_]", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    if not text:
+        text = "UNNAMED"
+    if text[0].isdigit():
+        text = f"_{text}"
+    return text
 
 
-def get_cell(row: Sequence[Any], header_map: Dict[str, int], *names: str, default=None):
-    for name in names:
-        idx = header_map.get(normalize_header(name))
-        if idx is not None and idx < len(row):
-            return row[idx]
-    return default
+def c_comment(value: Any) -> str:
+    text = "" if value is None else str(value)
+    return text.replace("/*", "/ *").replace("*/", "* /")
 
 
-def as_int(value: Any) -> Optional[int]:
-    if value is None or value == "":
+def to_int(value: Any) -> int | None:
+    if value in (None, ""):
         return None
     if isinstance(value, bool):
         return int(value)
@@ -64,17 +75,17 @@ def as_int(value: Any) -> Optional[int]:
         if math.isnan(value):
             return None
         return int(value)
-    s = str(value).strip()
-    if not s:
+    text = str(value).strip().replace(",", ".")
+    if not text:
         return None
     try:
-        return int(float(s))
+        return int(float(text))
     except ValueError:
         return None
 
 
-def as_cpp_number(value: Any) -> str:
-    if value is None or value == "":
+def to_cpp_number(value: Any) -> str:
+    if value in (None, ""):
         return "0"
     if isinstance(value, bool):
         return "1" if value else "0"
@@ -84,82 +95,62 @@ def as_cpp_number(value: Any) -> str:
         if value.is_integer():
             return str(int(value))
         return str(value).replace(",", ".")
-    s = str(value).strip().replace(",", ".")
-    return s if s else "0"
+    text = str(value).strip().replace(",", ".")
+    return text if text else "0"
 
 
-def sanitize_identifier(name: Any) -> str:
-    s = str(name).strip().upper()
-    s = s.replace("Ё", "Е")
-    s = re.sub(r"[^A-Z0-9_]", "_", s)
-    s = re.sub(r"_+", "_", s).strip("_")
-    if not s:
-        s = "UNNAMED"
-    if s[0].isdigit():
-        s = "_" + s
-    return s
+def pad140(line: str) -> str:
+    if len(line) >= LINE_WIDTH:
+        return line
+    return line + (" " * (LINE_WIDTH - len(line)))
 
 
-def c_comment_text(value: Any) -> str:
-    s = "" if value is None else str(value)
-    return s.replace("/*", "/ *").replace("*/", "* /")
+def banner(source: str) -> str:
+    rows = [
+        "/* -------------------------------------------------------------------------- */",
+        f"/* AUTO-GENERATED FILE. Source: {source:<49} */",
+        "/* Do not edit manually.                                                     */",
+        "/* -------------------------------------------------------------------------- */",
+        "",
+    ]
+    return "\n".join(rows)
 
 
-def file_banner(source_name: str) -> str:
-    return (
-        "/* -------------------------------------------------------------------------- */\n"
-        f"/* AUTO-GENERATED FILE. Source: {source_name:<49} */\n"
-        "/* Do not edit manually.                                                     */\n"
-        "/* -------------------------------------------------------------------------- */\n\n"
-    )
+def build_header_map(headers: list[Any]) -> dict[str, int]:
+    return {normalize_header(h): i for i, h in enumerate(headers)}
 
 
-def validate_dense_ids(items: Sequence["BaseRow"], kind: str) -> None:
-    ids = [item.id for item in items]
-    if len(ids) != len(set(ids)):
-        die(f"{kind}: обнаружены повторяющиеся ID")
-    expected = list(range(1, len(items) + 1))
-    actual = sorted(ids)
-    if actual != expected:
-        die(
-            f"{kind}: ID должны быть непрерывными в диапазоне 1..{len(items)}. "
-            f"Получено: {actual}"
-        )
+def get_by_header(row: list[Any], header_map: dict[str, int], *names: str, default: Any = None) -> Any:
+    for name in names:
+        idx = header_map.get(normalize_header(name))
+        if idx is not None and idx < len(row):
+            return row[idx]
+    return default
 
 
-def param_type_size(type_name: str) -> int:
-    t = sanitize_identifier(type_name)
-    if t == "D":
+def ensure_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def type_size_bits(type_name: str) -> int:
+    normalized = sanitize_identifier(type_name)
+    if normalized == "D":
         return 1
-    if t == "A":
+    if normalized == "A":
         return 8
-    if t == "AP":
+    if normalized == "AP":
         return 16
-    die(f"Неизвестный тип параметра для расчета размера: {type_name}")
+    fail(f"Неизвестный тип параметра: {type_name}")
     return 0
-
-
-def align_up(value: int, alignment: int) -> int:
-    if alignment <= 0:
-        return value
-    return ((value + alignment - 1) // alignment) * alignment
 
 
 def sign_macro(sign: str) -> str:
     return "TYPE_SIGN" if sanitize_identifier(sign) == "S" else "TYPE_UNSIGN"
 
 
-def format_struct_field(c_type: str, name: str, comment: str) -> str:
-    return f"\t{c_type:<10}\t{name:<16}\t/** {comment} */"
+def field_line(c_type: str, name: str, comment: str) -> str:
+    return pad140(f"\t{c_type:<10}\t{name:<20}\t/** {comment} */")
 
-
-def format_table_comment(name: str, description: str) -> str:
-    return f'/** "{c_comment_text(name)}"\t"{c_comment_text(description)}" */'
-
-
-# -----------------------------------------------------------------------------
-# data models
-# -----------------------------------------------------------------------------
 
 @dataclass
 class BaseRow:
@@ -174,403 +165,579 @@ class BaseRow:
     tar_b: Any
     tar_c: Any
     alg_name: str
+    msg_offset: int
+    msg_block_offset: int
+    msg_block_n: int
+    msg_cs_offset: int = 0
+    msg_cs_block_n: int = 0
+    is_placeholder: bool = False
 
 
 @dataclass
 class ParamRow(BaseRow):
-    msg_offset: int
-    msg_block_offset: int
-    msg_block_n: int
-    cs_data_offset: int = 0
-    cs_data_offset16: int = 0
+    pass
 
 
 @dataclass
 class CommandRow(BaseRow):
-    msg_offset: int
-    msg_block_offset: int
-    msg_block_n: int
+    pass
 
 
-# -----------------------------------------------------------------------------
-# parsing
-# -----------------------------------------------------------------------------
+@dataclass
+class SystemStats:
+    blocks: int
+    bits: int
 
-def read_workbook(path: Path):
+
+def load_data_book(path: Path):
     if not path.exists():
-        die(f"Excel-файл не найден: {path}")
+        fail(f"Excel-файл не найден: {path}")
     return load_workbook(path, data_only=True)
 
 
-def parse_params_sheet(wb) -> List[ParamRow]:
-    if "Params" not in wb.sheetnames:
-        die("В книге отсутствует лист 'Params'")
+def parse_sheet(wb, sheet_name: str, kind: str):
+    if sheet_name not in wb.sheetnames:
+        fail(f"В книге отсутствует лист '{sheet_name}'")
 
-    ws = wb["Params"]
-    headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
-    hm = make_header_map(headers)
+    sheet = wb[sheet_name]
+    headers = [sheet.cell(1, c).value for c in range(1, sheet.max_column + 1)]
+    hm = build_header_map(headers)
 
-    items: List[ParamRow] = []
-    for r in range(2, ws.max_row + 1):
-        row = [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
-        row_id = as_int(get_cell(row, hm, "ID"))
-        if row_id is None:
-            continue
+    raw_rows: list[dict[str, Any]] = []
+    used_ids: set[int] = set()
 
-        name = str(get_cell(row, hm, "Name", default="") or "").strip()
-        if not name:
-            die(f"Params: пустое Name в строке {r}")
+    for r in range(2, sheet.max_row + 1):
+        data = [sheet.cell(r, c).value for c in range(1, sheet.max_column + 1)]
 
-        msg_offset = as_int(get_cell(row, hm, "MSG_Offset"))
-        msg_block_offset = as_int(get_cell(row, hm, "MSG_Block_Offset"))
-        msg_block_n = as_int(get_cell(row, hm, "MSG_Block_N"))
+        row_id = to_int(get_by_header(data, hm, "ID"))
+        name = str(get_by_header(data, hm, "Name", default="") or "").strip()
+
+        msg_offset = to_int(get_by_header(data, hm, "MSG_Offset"))
+        msg_block_offset = to_int(get_by_header(data, hm, "MSG_Block_Offset"))
+        msg_block_n = to_int(get_by_header(data, hm, "MSG_Block_N"))
         if msg_offset is None or msg_block_offset is None or msg_block_n is None:
-            die(f"Params: пустые поля MSG_* в строке {r}")
+            fail(f"{kind}: пустые поля MSG_* в строке {r}")
 
-        items.append(
-            ParamRow(
-                row_num=r,
+        tar_a = get_by_header(data, hm, "tar_A")
+        tar_b = get_by_header(data, hm, "tar_B")
+        tar_c = get_by_header(data, hm, "tar_C")
+
+        if tar_a in (None, ""):
+            warn(f"{kind}: строка {r}, отсутствует tar_A -> подставлен TAR_NONE=0")
+            tar_a = TAR_NONE
+        if tar_b in (None, ""):
+            warn(f"{kind}: строка {r}, отсутствует tar_B -> подставлен TAR_NONE=0")
+            tar_b = TAR_NONE
+        if tar_c in (None, ""):
+            warn(f"{kind}: строка {r}, отсутствует tar_C -> подставлен TAR_NONE=0")
+            tar_c = TAR_NONE
+
+        if row_id is not None:
+            if row_id in used_ids:
+                fail(f"{kind}: обнаружен повторяющийся ID={row_id} (строка {r})")
+            used_ids.add(row_id)
+
+        raw_rows.append(
+            {
+                "row_num": r,
+                "id": row_id,
+                "name": name,
+                "description": str(get_by_header(data, hm, "Description", default="") or ""),
+                "system_name": str(get_by_header(data, hm, "System", default="NONE") or "NONE").strip(),
+                "type_name": str(get_by_header(data, hm, "Type", default="NONE") or "NONE").strip().upper(),
+                "sign": str(get_by_header(data, hm, "Syg", "Sign", default="U") or "U").strip().upper(),
+                "tar_a": tar_a,
+                "tar_b": tar_b,
+                "tar_c": tar_c,
+                "alg_name": str(get_by_header(data, hm, "Alg", "ALG", default="NONE") or "NONE").strip(),
+                "msg_offset": msg_offset,
+                "msg_block_offset": msg_block_offset,
+                "msg_block_n": msg_block_n,
+            }
+        )
+
+    if not raw_rows:
+        fail(f"Лист '{sheet_name}' пуст")
+
+    next_id = min(used_ids) if used_ids else 0
+
+    def allocate_id() -> int:
+        nonlocal next_id
+        while next_id in used_ids:
+            next_id += 1
+        value = next_id
+        used_ids.add(value)
+        next_id += 1
+        return value
+
+    rows: list[BaseRow] = []
+    for item in raw_rows:
+        row_id = item["id"]
+        if row_id is None:
+            row_id = allocate_id()
+            error_log(
+                f"{kind}: строка {item['row_num']}, отсутствует ID -> присвоен автоматически ID={row_id}"
+            )
+
+        name = item["name"]
+        if not name:
+            name = f"NONE_{row_id}"
+            warn(f"{kind}: строка {item['row_num']}, отсутствует Name -> использован {name}")
+
+        rows.append(
+            BaseRow(
+                row_num=item["row_num"],
                 id=row_id,
                 name=name,
-                description=str(get_cell(row, hm, "Description", default="") or ""),
-                system_name=str(get_cell(row, hm, "System", default="NONE") or "NONE").strip(),
-                type_name=str(get_cell(row, hm, "Type", default="NONE") or "NONE").strip().upper(),
-                sign=str(get_cell(row, hm, "Syg", "Sign", default="U") or "U").strip().upper(),
-                tar_a=get_cell(row, hm, "tar_A"),
-                tar_b=get_cell(row, hm, "tar_B"),
-                tar_c=get_cell(row, hm, "tar_C"),
-                alg_name=str(get_cell(row, hm, "Alg", "ALG", default="NONE") or "NONE").strip(),
-                msg_offset=msg_offset,
-                msg_block_offset=msg_block_offset,
-                msg_block_n=msg_block_n,
+                description=item["description"],
+                system_name=item["system_name"],
+                type_name=item["type_name"],
+                sign=item["sign"],
+                tar_a=item["tar_a"],
+                tar_b=item["tar_b"],
+                tar_c=item["tar_c"],
+                alg_name=item["alg_name"],
+                msg_offset=item["msg_offset"],
+                msg_block_offset=item["msg_block_offset"],
+                msg_block_n=item["msg_block_n"],
             )
         )
 
-    if not items:
-        die("Лист 'Params' пуст")
-
-    validate_dense_ids(items, "Params")
-    return sorted(items, key=lambda x: x.id)
+    return rows
 
 
-def parse_commands_sheet(wb) -> List[CommandRow]:
-    if "Commands" not in wb.sheetnames:
-        die("В книге отсутствует лист 'Commands'")
+def fill_id_gaps(rows: list[BaseRow], kind: str):
+    ids = [r.id for r in rows]
+    if len(ids) != len(set(ids)):
+        fail(f"{kind}: обнаружены повторяющиеся ID")
 
-    ws = wb["Commands"]
-    headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
-    hm = make_header_map(headers)
+    max_id = max(ids)
+    by_id = {r.id: r for r in rows}
+    result: list[BaseRow] = []
 
-    items: List[CommandRow] = []
-    for r in range(2, ws.max_row + 1):
-        row = [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
-        row_id = as_int(get_cell(row, hm, "ID"))
-        if row_id is None:
+    for idx in range(0, max_id + 1):
+        if idx in by_id:
+            result.append(by_id[idx])
             continue
 
-        name = str(get_cell(row, hm, "Name", default="") or "").strip()
-        if not name:
-            die(f"Commands: пустое Name в строке {r}")
-
-        msg_offset = as_int(get_cell(row, hm, "MSG_Offset"))
-        msg_block_offset = as_int(get_cell(row, hm, "MSG_Block_Offset"))
-        msg_block_n = as_int(get_cell(row, hm, "MSG_Block_N"))
-        if msg_offset is None or msg_block_offset is None or msg_block_n is None:
-            die(f"Commands: пустые поля MSG_* в строке {r}")
-
-        items.append(
-            CommandRow(
-                row_num=r,
-                id=row_id,
-                name=name,
-                description=str(get_cell(row, hm, "Description", default="") or ""),
-                system_name=str(get_cell(row, hm, "System", default="NONE") or "NONE").strip(),
-                type_name=str(get_cell(row, hm, "Type", default="NONE") or "NONE").strip().upper(),
-                sign=str(get_cell(row, hm, "Syg", "Sign", default="U") or "U").strip().upper(),
-                tar_a=get_cell(row, hm, "tar_A"),
-                tar_b=get_cell(row, hm, "tar_B"),
-                tar_c=get_cell(row, hm, "tar_C"),
-                alg_name=str(get_cell(row, hm, "Alg", "ALG", default="NONE") or "NONE").strip(),
-                msg_offset=msg_offset,
-                msg_block_offset=msg_block_offset,
-                msg_block_n=msg_block_n,
+        warn(f"{kind}: отсутствует ID={idx}, вставлен резервный NONE")
+        result.append(
+            BaseRow(
+                row_num=0,
+                id=idx,
+                name=f"NONE_{idx}",
+                description="RESERVED",
+                system_name="NONE",
+                type_name="D",
+                sign="U",
+                tar_a=TAR_NONE,
+                tar_b=TAR_NONE,
+                tar_c=TAR_NONE,
+                alg_name="NONE",
+                msg_offset=0,
+                msg_block_offset=0,
+                msg_block_n=0,
+                is_placeholder=True,
             )
         )
 
-    if not items:
-        die("Лист 'Commands' пуст")
-
-    validate_dense_ids(items, "Commands")
-    return sorted(items, key=lambda x: x.id)
+    return result
 
 
-# -----------------------------------------------------------------------------
-# dictionaries
-# -----------------------------------------------------------------------------
+def cast_params(rows: list[BaseRow]) -> list[ParamRow]:
+    return [ParamRow(**r.__dict__) for r in rows]
 
-def ordered_unique(values: Sequence[str], head: str = "NONE") -> List[str]:
-    seen = set()
-    result: List[str] = []
+
+def cast_commands(rows: list[BaseRow]) -> list[CommandRow]:
+    return [CommandRow(**r.__dict__) for r in rows]
+
+
+def ordered_unique(values: list[str], head: str = "NONE") -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
 
     def add(v: str) -> None:
-        sv = sanitize_identifier(v)
-        if sv not in seen:
-            seen.add(sv)
-            result.append(v)
+        k = sanitize_identifier(v)
+        if k in seen:
+            return
+        seen.add(k)
+        out.append(v)
 
     add(head)
     for value in values:
-        if value and sanitize_identifier(value) != sanitize_identifier(head):
+        if sanitize_identifier(value) != sanitize_identifier(head):
             add(value)
+    return out
+
+
+def collect_systems(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
+    return ordered_unique([*(x.system_name for x in params), *(x.system_name for x in commands)], "NONE")
+
+
+def collect_algs(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
+    return ordered_unique([*(x.alg_name for x in params), *(x.alg_name for x in commands)], "NONE")
+
+
+def collect_types(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
+    base = ["NONE", "D", "A", "AP", "SIGN", "UNSIGN"]
+    used = {sanitize_identifier(x) for x in base}
+    values = {sanitize_identifier(x.type_name): x.type_name for x in [*params, *commands]}
+    out = list(base)
+    for _, value in sorted(values.items(), key=lambda kv: kv[0]):
+        key = sanitize_identifier(value)
+        if key not in used:
+            out.append(value)
+            used.add(key)
+    return out
+
+
+def system_local_bits(rows: list[BaseRow], system_key: str) -> tuple[int, list[tuple[int, int, BaseRow]]]:
+    local_rows = [r for r in rows if sanitize_identifier(r.system_name) == system_key and not r.is_placeholder]
+    if not local_rows:
+        return 0, []
+
+    min_block = min(r.msg_block_n for r in local_rows)
+    intervals: list[tuple[int, int, BaseRow]] = []
+    max_end = 0
+
+    for row in local_rows:
+        size = type_size_bits(row.type_name)
+        start = (row.msg_block_n - min_block) * BLOCK_BITS + row.msg_block_offset
+        end = start + size
+        max_end = max(max_end, end)
+        intervals.append((start, end, row))
+
+    blocks = max(1, math.ceil(max_end / BLOCK_BITS))
+    return blocks, intervals
+
+
+def check_overlaps(rows: list[BaseRow], label: str) -> None:
+    systems = sorted({sanitize_identifier(r.system_name) for r in rows})
+    for sys_key in systems:
+        blocks, intervals = system_local_bits(rows, sys_key)
+        if blocks == 0:
+            continue
+        intervals.sort(key=lambda x: x[0])
+        for i in range(1, len(intervals)):
+            p_start, p_end, p_row = intervals[i - 1]
+            c_start, c_end, c_row = intervals[i]
+            if c_start < p_end:
+                fail(
+                    f"{label}/{sys_key}: пересечение битовых полей: "
+                    f"{p_row.name}[{p_start}:{p_end}] и {c_row.name}[{c_start}:{c_end}]"
+                )
+
+
+def system_stats(rows: list[BaseRow], systems: list[str], label: str) -> dict[str, SystemStats]:
+    result: dict[str, SystemStats] = {}
+
+    for sys in systems:
+        sys_key = sanitize_identifier(sys)
+        blocks, intervals = system_local_bits(rows, sys_key)
+        bits = blocks * BLOCK_BITS
+        result[sys_key] = SystemStats(blocks=blocks, bits=bits)
+
+        if blocks == 0:
+            info(f"{label}/{sys_key}: данных нет")
+            continue
+
+        occupied = [False] * bits
+        for start, end, _ in intervals:
+            for b in range(max(0, start), min(bits, end)):
+                occupied[b] = True
+
+        free_ranges: list[tuple[int, int]] = []
+        idx = 0
+        while idx < bits:
+            if occupied[idx]:
+                idx += 1
+                continue
+            begin = idx
+            while idx < bits and not occupied[idx]:
+                idx += 1
+            free_ranges.append((begin, idx))
+
+        if free_ranges:
+            pretty = ", ".join([f"[{a}:{b})" for a, b in free_ranges])
+            info(f"{label}/{sys_key}: незанятые биты: {pretty}")
+        else:
+            info(f"{label}/{sys_key}: незанятых бит нет")
+
     return result
 
 
-def collect_systems(params: Sequence[ParamRow], commands: Sequence[CommandRow]) -> List[str]:
-    values = [x.system_name for x in params] + [x.system_name for x in commands]
-    return ordered_unique(values, "NONE")
+def compute_cs_maps(systems: list[str], stats: dict[str, SystemStats]) -> tuple[dict[str, int], int]:
+    base_bits: dict[str, int] = {}
+    current = 0
+    for sys in systems:
+        key = sanitize_identifier(sys)
+        if key in ("NONE", "CS"):
+            continue
+        base_bits[key] = current
+        current += stats.get(key, SystemStats(0, 0)).bits
+    return base_bits, current
 
 
-def collect_algs(params: Sequence[ParamRow], commands: Sequence[CommandRow]) -> List[str]:
-    values = [x.alg_name for x in params] + [x.alg_name for x in commands]
-    return ordered_unique(values, "NONE")
+def assign_cs_offsets(rows: list[BaseRow], cs_base_bits: dict[str, int]) -> None:
+    # local base block index for each system
+    min_block_by_system: dict[str, int] = {}
+    for row in rows:
+        if row.is_placeholder:
+            continue
+        key = sanitize_identifier(row.system_name)
+        if key not in min_block_by_system:
+            min_block_by_system[key] = row.msg_block_n
+        else:
+            min_block_by_system[key] = min(min_block_by_system[key], row.msg_block_n)
+
+    for row in rows:
+        key = sanitize_identifier(row.system_name)
+        local_min = min_block_by_system.get(key, 0)
+        local_bit = (row.msg_block_n - local_min) * BLOCK_BITS + row.msg_block_offset
+        base = cs_base_bits.get(key, 0)
+        row.msg_cs_offset = base + local_bit
+        row.msg_cs_block_n = row.msg_cs_offset // BLOCK_BITS
 
 
-def collect_types(params: Sequence[ParamRow], commands: Sequence[CommandRow]) -> List[str]:
-    values = {sanitize_identifier(x.type_name): x.type_name for x in list(params) + list(commands)}
-    result: List[str] = ["NONE", "D", "A", "AP", "SIGN", "UNSIGN"]
-    used = {sanitize_identifier(x) for x in result}
-
-    for _, original in sorted(values.items(), key=lambda x: sanitize_identifier(x[1])):
-        s = sanitize_identifier(original)
-        if s not in used:
-            result.append(original)
-            used.add(s)
-
-    return result
+def make_define(name: str, value: Any, comment: str) -> str:
+    line = f"#define\t{name:<36}\t{value:<8}\t/** {c_comment(comment)} */"
+    return pad140(line)
 
 
-def compute_param_cs_offsets(params: Sequence[ParamRow]) -> None:
-    order: List[str] = []
-    system_rows: Dict[str, List[ParamRow]] = {}
-
-    for item in params:
-        sys_name = sanitize_identifier(item.system_name)
-        if sys_name not in system_rows:
-            order.append(sys_name)
-            system_rows[sys_name] = []
-        system_rows[sys_name].append(item)
-
-    current_base = 0
-    base_map: Dict[str, int] = {}
-
-    for sys_name in order:
-        rows = system_rows[sys_name]
-        base_map[sys_name] = current_base
-        system_size = 0
-        for row in rows:
-            end_offset = row.msg_offset + param_type_size(row.type_name)
-            if end_offset > system_size:
-                system_size = end_offset
-        current_base += align_up(system_size, 16)
-
-    for item in params:
-        base = base_map[sanitize_identifier(item.system_name)]
-        item.cs_data_offset = base + item.msg_offset
-        item.cs_data_offset16 = item.cs_data_offset // 16
-
-
-# -----------------------------------------------------------------------------
-# code generation
-# -----------------------------------------------------------------------------
-
-def format_define(name: str, value: int, comment: str) -> str:
-    return f"#define {name:<24} {value:<6} /** {c_comment_text(comment)} */"
-
-
-def generate_define_file(
-    macro_items: Sequence[tuple[str, int, str]],
-    max_macro_name: str,
-    max_value: int,
-) -> str:
-    lines: List[str] = []
-    lines.append(file_banner("BD.xlsx"))
-    lines.append("#pragma once\n")
-    for name, value, comment in macro_items:
-        lines.append(format_define(name, value, comment))
+def make_define_file(items: list[tuple[str, Any, str]], max_name: str, max_value: int) -> str:
+    lines: list[str] = [banner("BD.xlsx"), pad140("#pragma once"), ""]
+    for name, value, comment in items:
+        lines.append(make_define(name, value, comment))
     lines.append("")
-    lines.append(f"#define {max_macro_name:<24} {max_value}")
+    lines.append(pad140(f"#define\t{max_name:<36}\t{max_value}"))
     lines.append("")
     return "\n".join(lines)
 
 
-def generate_sys_list_hpp(systems: Sequence[str]) -> str:
-    items = []
+def make_sys_list(
+    systems: list[str],
+    pstats: dict[str, SystemStats],
+    cstats: dict[str, SystemStats],
+    cs_param_bits: int,
+    cs_comm_bits: int,
+) -> str:
+    items: list[tuple[str, Any, str]] = [("CS", 1, "включение CS")]
+
     for idx, name in enumerate(systems):
-        macro = f"SYS_{sanitize_identifier(name)}"
-        comment = "id системы" if idx == 0 and sanitize_identifier(name) == "NONE" else str(name)
-        items.append((macro, idx, comment))
-    return generate_define_file(items, "SYS_max", len(systems))
+        comment = "id системы" if idx == 0 and sanitize_identifier(name) == "NONE" else name
+        items.append((f"SYS_{sanitize_identifier(name)}", idx, comment))
+
+    for name in systems:
+        key = sanitize_identifier(name)
+        p = pstats.get(key, SystemStats(0, 0))
+        c = cstats.get(key, SystemStats(0, 0))
+
+        if key == "CS":
+            p = SystemStats(cs_param_bits // BLOCK_BITS, cs_param_bits)
+            c = SystemStats(cs_comm_bits // BLOCK_BITS, cs_comm_bits)
+
+        items.extend(
+            [
+                (f"{key}_PARAM_MSG_BLOCKS", p.blocks, f"{name}: max блоков параметров"),
+                (f"{key}_PARAM_MSG_BITS", p.bits, f"{name}: max длина параметров, бит"),
+                (f"{key}_COMM_MSG_BLOCKS", c.blocks, f"{name}: max блоков команд"),
+                (f"{key}_COMM_MSG_BITS", c.bits, f"{name}: max длина команд, бит"),
+            ]
+        )
+
+    return make_define_file(items, "SYS_max", len(systems))
 
 
-def generate_alg_list_hpp(algs: Sequence[str]) -> str:
+def make_alg_list(algs: list[str]) -> str:
     items = []
     for idx, name in enumerate(algs):
-        macro = f"ALG_{sanitize_identifier(name)}"
-        comment = "алгоритм обработки" if idx == 0 and sanitize_identifier(name) == "NONE" else str(name)
-        items.append((macro, idx, comment))
-    return generate_define_file(items, "ALG_max", len(algs))
+        comment = "алгоритм обработки" if idx == 0 and sanitize_identifier(name) == "NONE" else name
+        items.append((f"ALG_{sanitize_identifier(name)}", idx, comment))
+    return make_define_file(items, "ALG_max", len(algs))
 
 
-def generate_type_list_hpp(types: Sequence[str]) -> str:
+def make_type_list(types: list[str]) -> str:
     items = []
     for idx, name in enumerate(types):
-        macro = f"TYPE_{sanitize_identifier(name)}"
-        comment = "тип данных" if idx == 0 and sanitize_identifier(name) == "NONE" else str(name)
-        items.append((macro, idx, comment))
-    return generate_define_file(items, "TYPE_max", len(types))
+        comment = "тип данных" if idx == 0 and sanitize_identifier(name) == "NONE" else name
+        items.append((f"TYPE_{sanitize_identifier(name)}", idx, comment))
+    return make_define_file(items, "TYPE_max", len(types))
 
 
-def generate_param_list_hpp(params: Sequence[ParamRow]) -> str:
-    items = []
-    for item in params:
-        items.append((sanitize_identifier(item.name), item.id, item.description))
-    return generate_define_file(items, "Param_max", len(params) + 1)
+def make_param_list(params: list[ParamRow]) -> str:
+    items = [(sanitize_identifier(r.name), r.id, r.description) for r in params]
+    return make_define_file(items, "Param_max", max((r.id for r in params), default=0) + 1)
 
 
-def generate_command_list_hpp(commands: Sequence[CommandRow]) -> str:
-    items = []
-    for item in commands:
-        items.append((sanitize_identifier(item.name), item.id, item.description))
-    return generate_define_file(items, "Comm_max", len(commands) + 1)
+def make_command_list(commands: list[CommandRow]) -> str:
+    items = [(sanitize_identifier(r.name), r.id, r.description) for r in commands]
+    return make_define_file(items, "Comm_max", max((r.id for r in commands), default=0) + 1)
 
 
-def generate_param_tab_hpp(params: Sequence[ParamRow]) -> str:
-    lines: List[str] = []
-    lines.append(file_banner("BD.xlsx"))
-    lines.append("#pragma once")
-    lines.append("#include <stdint.h>\n")
-    lines.append('#include "sys_list.hpp"')
-    lines.append('#include "type_list.hpp"')
-    lines.append('#include "alg_list.hpp"')
-    lines.append('#include "param_list.hpp"\n')
+def table_comment(name: str, desc: str) -> str:
+    return f'/** "{c_comment(name)}"\t"{c_comment(desc)}" */'
 
-    lines.append("struct S_paramtab{")
-    lines.append(format_struct_field("char", "sys_id;", "id системы"))
-    lines.append(format_struct_field("char", "type;", "тип данных"))
-    lines.append(format_struct_field("char", "sign;", "TYPE_SIGN / TYPE_UNSIGN"))
-    lines.append(format_struct_field("float", "tar_a;", "тарировка A"))
-    lines.append(format_struct_field("float", "tar_b;", "тарировка B"))
-    lines.append(format_struct_field("float", "tar_c;", "тарировка C"))
-    lines.append(format_struct_field("uint16_t", "msg_offset;", "смещение в сообщении"))
-    lines.append(format_struct_field("char", "msg_block_offset;", "смещение в блоке данных"))
-    lines.append(format_struct_field("char", "msg_block_n;", "номер блока данных"))
-    lines.append(format_struct_field("uint16_t", "cs_data_offset;", "смещение в CS data"))
-    lines.append(format_struct_field("uint16_t", "cs_data_offset16;", "смещение 16-битного CS data"))
-    lines.append(format_struct_field("char", "alg;", "алгоритм обработки"))
-    lines.append("};\n")
 
-    lines.append("struct S_paramtab S_baseparamtab[Param_max]={")
-    for i, item in enumerate(params):
-        init = (
-            f"\t{{SYS_{sanitize_identifier(item.system_name)}, "
-            f"TYPE_{sanitize_identifier(item.type_name)}, "
-            f"{sign_macro(item.sign)}, "
-            f"{as_cpp_number(item.tar_a)}, "
-            f"{as_cpp_number(item.tar_b)}, "
-            f"{as_cpp_number(item.tar_c)}, "
-            f"{item.msg_offset}, "
-            f"{item.msg_block_offset}, "
-            f"{item.msg_block_n}, "
-            f"{item.cs_data_offset}, "
-            f"{item.cs_data_offset16}, "
-            f"ALG_{sanitize_identifier(item.alg_name)}}}"
+def align_rows(init_rows: list[str], comments: list[str], commas: list[bool]) -> list[str]:
+    rows_with_commas = [f"{r}{',' if c else ''}" for r, c in zip(init_rows, commas)]
+    max_len = max((len(r) for r in rows_with_commas), default=0)
+    out = []
+    for row, comment in zip(rows_with_commas, comments):
+        out.append(pad140(f"{row:<{max_len}}\t{comment}"))
+    return out
+
+
+def make_param_tab(params: list[ParamRow]) -> str:
+    lines = [
+        banner("BD.xlsx"),
+        pad140("#pragma once"),
+        pad140("#include <stdint.h>"),
+        "",
+        pad140('#include "sys_list.hpp"'),
+        pad140('#include "type_list.hpp"'),
+        pad140('#include "alg_list.hpp"'),
+        pad140('#include "param_list.hpp"'),
+        "",
+        pad140("#define\tTAR_NONE\t0"),
+        "",
+        pad140("struct S_paramtab{"),
+        field_line("char", "sys_id;", "id системы"),
+        field_line("char", "type;", "тип данных"),
+        field_line("char", "sign;", "TYPE_SIGN / TYPE_UNSIGN"),
+        field_line("char", "tar_a;", "тарировка A"),
+        field_line("char", "tar_b;", "тарировка B"),
+        field_line("char", "tar_c;", "тарировка C"),
+        field_line("uint16_t", "msg_offset;", "глобальное смещение в сообщении"),
+        field_line("char", "msg_block_offset;", "смещение в блоке данных"),
+        field_line("char", "msg_block_n;", "номер блока данных"),
+        field_line("uint16_t", "msg_cs_offset;", "глобальное смещение внутри CS"),
+        field_line("char", "msg_cs_block_n;", "номер блока внутри CS"),
+        field_line("char", "alg;", "алгоритм обработки"),
+        pad140("};"),
+        "",
+        pad140("struct S_paramtab S_baseparamtab[Param_max]={"),
+    ]
+
+    init_rows: list[str] = []
+    comments: list[str] = []
+    commas: list[bool] = []
+    for idx, r in enumerate(params):
+        init_rows.append(
+            (
+                f"\t{{SYS_{sanitize_identifier(r.system_name)}, TYPE_{sanitize_identifier(r.type_name)}, {sign_macro(r.sign)}, "
+                f"{to_cpp_number(r.tar_a)}, {to_cpp_number(r.tar_b)}, {to_cpp_number(r.tar_c)}, {r.msg_offset}, "
+                f"{r.msg_block_offset}, {r.msg_block_n}, {r.msg_cs_offset}, {r.msg_cs_block_n}, ALG_{sanitize_identifier(r.alg_name)}}}"
+            )
         )
-        comma = "," if i != len(params) - 1 else ""
-        lines.append(f"{init}{comma}\t{format_table_comment(item.name, item.description)}")
-    lines.append("};\n")
+        comments.append(table_comment(r.name, r.description))
+        commas.append(idx != len(params) - 1)
+
+    lines.extend(align_rows(init_rows, comments, commas))
+    lines.append(pad140("};"))
+    lines.append("")
     return "\n".join(lines)
 
 
-def generate_command_tab_hpp(commands: Sequence[CommandRow]) -> str:
-    lines: List[str] = []
-    lines.append(file_banner("BD.xlsx"))
-    lines.append("#pragma once")
-    lines.append("#include <stdint.h>\n")
-    lines.append('#include "sys_list.hpp"')
-    lines.append('#include "type_list.hpp"')
-    lines.append('#include "alg_list.hpp"')
-    lines.append('#include "command_list.hpp"\n')
+def make_command_tab(commands: list[CommandRow]) -> str:
+    lines = [
+        banner("BD.xlsx"),
+        pad140("#pragma once"),
+        pad140("#include <stdint.h>"),
+        "",
+        pad140('#include "sys_list.hpp"'),
+        pad140('#include "type_list.hpp"'),
+        pad140('#include "alg_list.hpp"'),
+        pad140('#include "command_list.hpp"'),
+        "",
+        pad140("#define\tTAR_NONE\t0"),
+        "",
+        pad140("struct S_commtab{"),
+        field_line("char", "sys_id;", "id системы"),
+        field_line("char", "type;", "тип данных"),
+        field_line("char", "sign;", "TYPE_SIGN / TYPE_UNSIGN"),
+        field_line("char", "tar_a;", "тарировка A"),
+        field_line("char", "tar_b;", "тарировка B"),
+        field_line("char", "tar_c;", "тарировка C"),
+        field_line("uint16_t", "msg_offset;", "глобальное смещение в сообщении"),
+        field_line("char", "msg_block_offset;", "смещение в блоке данных"),
+        field_line("char", "msg_block_n;", "номер блока данных"),
+        field_line("uint16_t", "msg_cs_offset;", "глобальное смещение внутри CS"),
+        field_line("char", "msg_cs_block_n;", "номер блока внутри CS"),
+        field_line("char", "alg;", "алгоритм обработки"),
+        pad140("};"),
+        "",
+        pad140("struct S_commtab S_basecommtab[Comm_max]={"),
+    ]
 
-    lines.append("struct S_commtab{")
-    lines.append(format_struct_field("char", "sys_id;", "id системы"))
-    lines.append(format_struct_field("char", "type;", "тип данных"))
-    lines.append(format_struct_field("char", "sign;", "TYPE_SIGN / TYPE_UNSIGN"))
-    lines.append(format_struct_field("float", "tar_a;", "тарировка A"))
-    lines.append(format_struct_field("float", "tar_b;", "тарировка B"))
-    lines.append(format_struct_field("float", "tar_c;", "тарировка C"))
-    lines.append(format_struct_field("uint16_t", "msg_offset;", "смещение в сообщении"))
-    lines.append(format_struct_field("char", "msg_block_offset;", "смещение в блоке данных"))
-    lines.append(format_struct_field("char", "msg_block_n;", "номер блока данных"))
-    lines.append(format_struct_field("char", "alg;", "алгоритм обработки"))
-    lines.append("};\n")
-
-    lines.append("struct S_commtab S_basecommtab[Comm_max]={")
-    for i, item in enumerate(commands):
-        init = (
-            f"\t{{SYS_{sanitize_identifier(item.system_name)}, "
-            f"TYPE_{sanitize_identifier(item.type_name)}, "
-            f"{sign_macro(item.sign)}, "
-            f"{as_cpp_number(item.tar_a)}, "
-            f"{as_cpp_number(item.tar_b)}, "
-            f"{as_cpp_number(item.tar_c)}, "
-            f"{item.msg_offset}, "
-            f"{item.msg_block_offset}, "
-            f"{item.msg_block_n}, "
-            f"ALG_{sanitize_identifier(item.alg_name)}}}"
+    init_rows: list[str] = []
+    comments: list[str] = []
+    commas: list[bool] = []
+    for idx, r in enumerate(commands):
+        init_rows.append(
+            (
+                f"\t{{SYS_{sanitize_identifier(r.system_name)}, TYPE_{sanitize_identifier(r.type_name)}, {sign_macro(r.sign)}, "
+                f"{to_cpp_number(r.tar_a)}, {to_cpp_number(r.tar_b)}, {to_cpp_number(r.tar_c)}, {r.msg_offset}, "
+                f"{r.msg_block_offset}, {r.msg_block_n}, {r.msg_cs_offset}, {r.msg_cs_block_n}, ALG_{sanitize_identifier(r.alg_name)}}}"
+            )
         )
-        comma = "," if i != len(commands) - 1 else ""
-        lines.append(f"{init}{comma}\t{format_table_comment(item.name, item.description)}")
-    lines.append("};\n")
+        comments.append(table_comment(r.name, r.description))
+        commas.append(idx != len(commands) - 1)
+
+    lines.extend(align_rows(init_rows, comments, commas))
+    lines.append(pad140("};"))
+    lines.append("")
     return "\n".join(lines)
 
 
-# -----------------------------------------------------------------------------
-# main
-# -----------------------------------------------------------------------------
-
-def write_text_file(path: Path, content: str) -> None:
+def write_file(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8", newline="\n")
 
 
-def generate_all() -> None:
-    wb = read_workbook(EXCEL_PATH)
+def main() -> None:
+    wb = load_data_book(EXCEL_PATH)
 
-    params = parse_params_sheet(wb)
-    commands = parse_commands_sheet(wb)
+    params_raw = parse_sheet(wb, "Params", "Params")
+    commands_raw = parse_sheet(wb, "Commands", "Commands")
 
-    compute_param_cs_offsets(params)
+    params = cast_params(fill_id_gaps(params_raw, "Params"))
+    commands = cast_commands(fill_id_gaps(commands_raw, "Commands"))
+
+    check_overlaps(params, "Params")
+    check_overlaps(commands, "Commands")
 
     systems = collect_systems(params, commands)
-    types = collect_types(params, commands)
     algs = collect_algs(params, commands)
+    types = collect_types(params, commands)
+
+    pstats = system_stats(params, systems, "Params")
+    cstats = system_stats(commands, systems, "Commands")
+
+    cs_param_base, cs_param_bits = compute_cs_maps(systems, pstats)
+    cs_comm_base, cs_comm_bits = compute_cs_maps(systems, cstats)
+
+    info(f"CS/PARAM: суммарно блоков={cs_param_bits // BLOCK_BITS}, бит={cs_param_bits}")
+    info(f"CS/COMM: суммарно блоков={cs_comm_bits // BLOCK_BITS}, бит={cs_comm_bits}")
+
+    assign_cs_offsets(params, cs_param_base)
+    assign_cs_offsets(commands, cs_comm_base)
 
     ensure_dir(OUTPUT_DIR)
 
     files = {
-        "sys_list.hpp": generate_sys_list_hpp(systems),
-        "alg_list.hpp": generate_alg_list_hpp(algs),
-        "type_list.hpp": generate_type_list_hpp(types),
-        "param_list.hpp": generate_param_list_hpp(params),
-        "param_tab.hpp": generate_param_tab_hpp(params),
-        "command_list.hpp": generate_command_list_hpp(commands),
-        "command_tab.hpp": generate_command_tab_hpp(commands),
+        "sys_list.hpp": make_sys_list(systems, pstats, cstats, cs_param_bits, cs_comm_bits),
+        "alg_list.hpp": make_alg_list(algs),
+        "type_list.hpp": make_type_list(types),
+        "param_list.hpp": make_param_list(params),
+        "param_tab.hpp": make_param_tab(params),
+        "command_list.hpp": make_command_list(commands),
+        "command_tab.hpp": make_command_tab(commands),
     }
 
-    for filename, content in files.items():
-        write_text_file(OUTPUT_DIR / filename, content)
+    for fname, content in files.items():
+        write_file(OUTPUT_DIR / fname, content)
 
     print(f"Generated {len(files)} files in: {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":
-    generate_all()
+    main()

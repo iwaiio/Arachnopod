@@ -107,10 +107,10 @@ def pad140(line: str) -> str:
 
 def banner(source: str) -> str:
     rows = [
-        "/* -------------------------------------------------------------------------- */",
-        f"/* AUTO-GENERATED FILE. Source: {source:<49} */",
-        "/* Do not edit manually.                                                     */",
-        "/* -------------------------------------------------------------------------- */",
+        "/* -------------------------------------------------------------------------------------------------------------------------------------- */",
+        f"/* AUTO-GENERATED FILE. Source: {source:<105} */",
+        "/* Do not edit manually.                                                                                                                  */",
+        "/* -------------------------------------------------------------------------------------------------------------------------------------- */",
         "",
     ]
     return "\n".join(rows)
@@ -637,7 +637,7 @@ def make_sys_list(
         filtered.append(name)
 
     for idx, name in enumerate(filtered, start=2):
-        items.append((f"SYS_{sanitize_identifier(name)}", idx, name))
+        items.append((f"SYS_{sanitize_identifier(name)}", idx, f"id системы {name}"))
 
     metric_targets = ["CS", *filtered]
     for name in metric_targets:

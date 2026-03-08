@@ -127,7 +127,6 @@ def get_by_header(row: list[Any], header_map: dict[str, int], *names: str, defau
             return row[idx]
     return default
 
-
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
@@ -137,6 +136,10 @@ def get_by_header(row: list[Any], header_map: dict[str, int], *names: str, defau
         if idx is not None and idx < len(row):
             return row[idx]
     return default
+
+def ensure_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
 
 def type_size_bits(type_name: str) -> int:
     normalized = sanitize_identifier(type_name)
@@ -154,11 +157,27 @@ def sign_macro(sign: str) -> str:
     return "TYPE_SIGN" if sanitize_identifier(sign) == "S" else "TYPE_UNSIGN"
 
 
-def field_line(c_type: str, name: str, comment: str) -> str:
-    return pad140(f"\t{c_type:<10}\t{name:<20}\t/** {comment} */")
+def make_aligned_comment(left: str, right: str = "", width: int = LINE_WIDTH) -> str:
+    left_text = c_comment(left)
+    right_text = c_comment(right)
+    inner_width = max(0, width - len("/** ") - len(" */"))
+    if right_text:
+        spacer = max(1, inner_width - len(left_text) - len(right_text))
+        body = f"{left_text}{' ' * spacer}{right_text}"
+    else:
+        body = left_text
+    if len(body) < inner_width:
+        body = body + (" " * (inner_width - len(body)))
+    else:
+        body = body[:inner_width]
+    return f"/** {body} */"
 
-    for row, comment in zip(init_with_commas, comments):
-        merged_rows.append(f"{row:<{max_len}}  {comment}")
+
+def field_line(c_type: str, name: str, right_comment: str) -> str:
+    prefix = f"	{c_type:<10}	{name:<20}	"
+    comment = make_aligned_comment(name.strip(';'), right_comment, LINE_WIDTH - len(prefix))
+    return (prefix + comment)[:LINE_WIDTH]
+
 
 @dataclass
 class BaseRow:
@@ -217,19 +236,71 @@ def parse_sheet(wb, sheet_name: str, kind: str):
     for r in range(2, sheet.max_row + 1):
         data = [sheet.cell(r, c).value for c in range(1, sheet.max_column + 1)]
 
-        row_id = to_int(get_by_header(data, hm, "ID"))
-        name = str(get_by_header(data, hm, "Name", default="") or "").strip()
+        raw_id = get_by_header(data, hm, "ID")
+        row_id = to_int(raw_id)
 
-        msg_offset = to_int(get_by_header(data, hm, "MSG_Offset"))
-        msg_block_offset = to_int(get_by_header(data, hm, "MSG_Block_Offset"))
-        msg_block_n = to_int(get_by_header(data, hm, "MSG_Block_N"))
-        if msg_offset is None or msg_block_offset is None or msg_block_n is None:
-            fail(f"{kind}: пустые поля MSG_* в строке {r}")
+        raw_name = get_by_header(data, hm, "Name", default="")
+        raw_description = get_by_header(data, hm, "Description", default="")
+        raw_system = get_by_header(data, hm, "System", default="NONE")
+        raw_type = get_by_header(data, hm, "Type", default="D")
+        raw_sign = get_by_header(data, hm, "Syg", "Sign", default="U")
+        raw_tar_a = get_by_header(data, hm, "tar_A")
+        raw_tar_b = get_by_header(data, hm, "tar_B")
+        raw_tar_c = get_by_header(data, hm, "tar_C")
+        raw_alg = get_by_header(data, hm, "Alg", "ALG", default="NONE")
+        raw_msg_offset = get_by_header(data, hm, "MSG_Offset")
+        raw_msg_block_offset = get_by_header(data, hm, "MSG_Block_Offset")
+        raw_msg_block_n = get_by_header(data, hm, "MSG_Block_N")
 
-        tar_a = get_by_header(data, hm, "tar_A")
-        tar_b = get_by_header(data, hm, "tar_B")
-        tar_c = get_by_header(data, hm, "tar_C")
+        all_empty = all(
+            x in (None, "")
+            for x in [
+                raw_id,
+                raw_name,
+                raw_description,
+                raw_system,
+                raw_type,
+                raw_sign,
+                raw_tar_a,
+                raw_tar_b,
+                raw_tar_c,
+                raw_alg,
+                raw_msg_offset,
+                raw_msg_block_offset,
+                raw_msg_block_n,
+            ]
+        )
+        if all_empty:
+            continue
 
+        if row_id is not None:
+            if row_id in used_ids:
+                fail(f"{kind}: обнаружен повторяющийся ID={row_id} (строка {r})")
+            used_ids.add(row_id)
+
+        name = str(raw_name or "").strip()
+        if not name:
+            warn(f"{kind}: строка {r}, отсутствует Name -> будет NONE_<ID>")
+
+        description = str(raw_description or "")
+        if raw_description in (None, ""):
+            warn(f"{kind}: строка {r}, отсутствует Description -> подставлено пустое значение")
+
+        system_name = str(raw_system or "NONE").strip() or "NONE"
+        if raw_system in (None, ""):
+            warn(f"{kind}: строка {r}, отсутствует System -> подставлено NONE")
+
+        type_name = str(raw_type or "D").strip().upper() or "D"
+        if raw_type in (None, ""):
+            warn(f"{kind}: строка {r}, отсутствует Type -> подставлено D")
+
+        sign = str(raw_sign or "U").strip().upper() or "U"
+        if raw_sign in (None, ""):
+            warn(f"{kind}: строка {r}, отсутствует Sign/Syg -> подставлено U")
+
+        tar_a = raw_tar_a
+        tar_b = raw_tar_b
+        tar_c = raw_tar_c
         if tar_a in (None, ""):
             warn(f"{kind}: строка {r}, отсутствует tar_A -> подставлен TAR_NONE=0")
             tar_a = TAR_NONE
@@ -240,24 +311,36 @@ def parse_sheet(wb, sheet_name: str, kind: str):
             warn(f"{kind}: строка {r}, отсутствует tar_C -> подставлен TAR_NONE=0")
             tar_c = TAR_NONE
 
-        if row_id is not None:
-            if row_id in used_ids:
-                fail(f"{kind}: обнаружен повторяющийся ID={row_id} (строка {r})")
-            used_ids.add(row_id)
+        alg_name = str(raw_alg or "NONE").strip() or "NONE"
+        if raw_alg in (None, ""):
+            warn(f"{kind}: строка {r}, отсутствует Alg -> подставлено NONE")
+
+        msg_offset = to_int(raw_msg_offset)
+        msg_block_offset = to_int(raw_msg_block_offset)
+        msg_block_n = to_int(raw_msg_block_n)
+        if msg_offset is None:
+            warn(f"{kind}: строка {r}, отсутствует MSG_Offset -> подставлено 0")
+            msg_offset = 0
+        if msg_block_offset is None:
+            warn(f"{kind}: строка {r}, отсутствует MSG_Block_Offset -> подставлено 0")
+            msg_block_offset = 0
+        if msg_block_n is None:
+            warn(f"{kind}: строка {r}, отсутствует MSG_Block_N -> подставлено 0")
+            msg_block_n = 0
 
         raw_rows.append(
             {
                 "row_num": r,
                 "id": row_id,
                 "name": name,
-                "description": str(get_by_header(data, hm, "Description", default="") or ""),
-                "system_name": str(get_by_header(data, hm, "System", default="NONE") or "NONE").strip(),
-                "type_name": str(get_by_header(data, hm, "Type", default="NONE") or "NONE").strip().upper(),
-                "sign": str(get_by_header(data, hm, "Syg", "Sign", default="U") or "U").strip().upper(),
+                "description": description,
+                "system_name": system_name,
+                "type_name": type_name,
+                "sign": sign,
                 "tar_a": tar_a,
                 "tar_b": tar_b,
                 "tar_c": tar_c,
-                "alg_name": str(get_by_header(data, hm, "Alg", "ALG", default="NONE") or "NONE").strip(),
+                "alg_name": alg_name,
                 "msg_offset": msg_offset,
                 "msg_block_offset": msg_block_offset,
                 "msg_block_n": msg_block_n,
@@ -290,7 +373,6 @@ def parse_sheet(wb, sheet_name: str, kind: str):
         name = item["name"]
         if not name:
             name = f"NONE_{row_id}"
-            warn(f"{kind}: строка {item['row_num']}, отсутствует Name -> использован {name}")
 
         rows.append(
             BaseRow(
@@ -513,8 +595,14 @@ def assign_cs_offsets(rows: list[BaseRow], cs_base_bits: dict[str, int]) -> None
 
 
 def make_define(name: str, value: Any, comment: str) -> str:
-    line = f"#define\t{name:<36}\t{value:<8}\t/** {c_comment(comment)} */"
-    return pad140(line)
+    prefix = f"#define {name:<34} {str(value):<6} "
+    comment_width = LINE_WIDTH - len(prefix) - len("/** ") - len("*/")
+    comment_text = c_comment(comment)
+    if len(comment_text) < comment_width:
+        comment_text = comment_text + (" " * (comment_width - len(comment_text)))
+    else:
+        comment_text = comment_text[:comment_width]
+    return f"{prefix}/** {comment_text}*/"
 
 
 def make_define_file(items: list[tuple[str, Any, str]], max_name: str, max_value: int) -> str:
@@ -522,7 +610,7 @@ def make_define_file(items: list[tuple[str, Any, str]], max_name: str, max_value
     for name, value, comment in items:
         lines.append(make_define(name, value, comment))
     lines.append("")
-    lines.append(pad140(f"#define\t{max_name:<36}\t{max_value}"))
+    lines.append(make_define(max_name, max_value, ""))
     lines.append("")
     return "\n".join(lines)
 
@@ -534,13 +622,25 @@ def make_sys_list(
     cs_param_bits: int,
     cs_comm_bits: int,
 ) -> str:
-    items: list[tuple[str, Any, str]] = [("CS", 1, "включение CS")]
+    items: list[tuple[str, Any, str]] = [
+        ("SYS_NONE", 0, "id системы NONE"),
+        ("SYS_CS", 1, "id системы CS"),
+    ]
 
-    for idx, name in enumerate(systems):
-        comment = "id системы" if idx == 0 and sanitize_identifier(name) == "NONE" else name
-        items.append((f"SYS_{sanitize_identifier(name)}", idx, comment))
-
+    filtered: list[str] = []
+    seen: set[str] = set()
     for name in systems:
+        key = sanitize_identifier(name)
+        if key in ("NONE", "CS") or key in seen:
+            continue
+        seen.add(key)
+        filtered.append(name)
+
+    for idx, name in enumerate(filtered, start=2):
+        items.append((f"SYS_{sanitize_identifier(name)}", idx, name))
+
+    metric_targets = ["CS", *filtered]
+    for name in metric_targets:
         key = sanitize_identifier(name)
         p = pstats.get(key, SystemStats(0, 0))
         c = cstats.get(key, SystemStats(0, 0))
@@ -558,8 +658,9 @@ def make_sys_list(
             ]
         )
 
-    return make_define_file(items, "SYS_max", len(systems))
+    return make_define_file(items, "SYS_max", len(filtered) + 2)
 
+    return make_define_file(items, "SYS_max", len(systems))
 
 def make_alg_list(algs: list[str]) -> str:
     items = []
@@ -587,16 +688,18 @@ def make_command_list(commands: list[CommandRow]) -> str:
     return make_define_file(items, "Comm_max", max((r.id for r in commands), default=0) + 1)
 
 
-def table_comment(name: str, desc: str) -> str:
-    return f'/** "{c_comment(name)}"\t"{c_comment(desc)}" */'
+def table_comment(name: str, desc: str) -> tuple[str, str]:
+    return (f'"{name}"', f'"{desc}"')
 
 
-def align_rows(init_rows: list[str], comments: list[str], commas: list[bool]) -> list[str]:
+def align_rows(init_rows: list[str], comments: list[tuple[str, str]], commas: list[bool]) -> list[str]:
     rows_with_commas = [f"{r}{',' if c else ''}" for r, c in zip(init_rows, commas)]
     max_len = max((len(r) for r in rows_with_commas), default=0)
     out = []
-    for row, comment in zip(rows_with_commas, comments):
-        out.append(pad140(f"{row:<{max_len}}\t{comment}"))
+    for row, (left_comment, right_comment) in zip(rows_with_commas, comments):
+        prefix = f"{row:<{max_len}}	"
+        comment = make_aligned_comment(left_comment, right_comment, LINE_WIDTH - len(prefix))
+        out.append((prefix + comment)[:LINE_WIDTH])
     return out
 
 
@@ -632,7 +735,7 @@ def make_param_tab(params: list[ParamRow]) -> str:
     ]
 
     init_rows: list[str] = []
-    comments: list[str] = []
+    comments: list[tuple[str, str]] = []
     commas: list[bool] = []
     for idx, r in enumerate(params):
         init_rows.append(
@@ -650,7 +753,10 @@ def make_param_tab(params: list[ParamRow]) -> str:
     lines.append("")
     return "\n".join(lines)
 
-    lines.extend(align_table_rows(init_rows, comments, trailing_comma))
+    lines.extend(align_rows(init_rows, comments, commas))
+    lines.append(pad140("};"))
+    lines.append("")
+    return "\n".join(lines)
 
 def make_command_tab(commands: list[CommandRow]) -> str:
     lines = [
@@ -684,7 +790,7 @@ def make_command_tab(commands: list[CommandRow]) -> str:
     ]
 
     init_rows: list[str] = []
-    comments: list[str] = []
+    comments: list[tuple[str, str]] = []
     commas: list[bool] = []
     for idx, r in enumerate(commands):
         init_rows.append(
@@ -750,7 +856,8 @@ def main() -> None:
     for fname, content in files.items():
         write_file(OUTPUT_DIR / fname, content)
 
-    print(f"Generated {len(outputs)} files in: {OUTPUT_DIR}")
+    print(f"Generated {len(files)} files in: {OUTPUT_DIR}")
+    print("Done!")
 
 
 if __name__ == "__main__":

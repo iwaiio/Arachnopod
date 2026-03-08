@@ -131,6 +131,12 @@ def get_by_header(row: list[Any], header_map: dict[str, int], *names: str, defau
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
+def get_by_header(row: list[Any], header_map: dict[str, int], *names: str, default: Any = None) -> Any:
+    for name in names:
+        idx = header_map.get(normalize_header(name))
+        if idx is not None and idx < len(row):
+            return row[idx]
+    return default
 
 def type_size_bits(type_name: str) -> int:
     normalized = sanitize_identifier(type_name)
@@ -151,6 +157,8 @@ def sign_macro(sign: str) -> str:
 def field_line(c_type: str, name: str, comment: str) -> str:
     return pad140(f"\t{c_type:<10}\t{name:<20}\t/** {comment} */")
 
+    for row, comment in zip(init_with_commas, comments):
+        merged_rows.append(f"{row:<{max_len}}  {comment}")
 
 @dataclass
 class BaseRow:
@@ -373,10 +381,15 @@ def ordered_unique(values: list[str], head: str = "NONE") -> list[str]:
 def collect_systems(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
     return ordered_unique([*(x.system_name for x in params), *(x.system_name for x in commands)], "NONE")
 
+def collect_algorithms(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
+    return ordered_unique([*map(lambda x: x.alg_name, params), *map(lambda x: x.alg_name, commands)])
 
 def collect_algs(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
     return ordered_unique([*(x.alg_name for x in params), *(x.alg_name for x in commands)], "NONE")
 
+def collect_types(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
+    preset = ["NONE", "D", "A", "AP", "SIGN", "UNSIGN"]
+    used = {sanitize_identifier(x) for x in preset}
 
 def collect_types(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
     base = ["NONE", "D", "A", "AP", "SIGN", "UNSIGN"]
@@ -637,6 +650,7 @@ def make_param_tab(params: list[ParamRow]) -> str:
     lines.append("")
     return "\n".join(lines)
 
+    lines.extend(align_table_rows(init_rows, comments, trailing_comma))
 
 def make_command_tab(commands: list[CommandRow]) -> str:
     lines = [
@@ -736,7 +750,7 @@ def main() -> None:
     for fname, content in files.items():
         write_file(OUTPUT_DIR / fname, content)
 
-    print(f"Generated {len(files)} files in: {OUTPUT_DIR}")
+    print(f"Generated {len(outputs)} files in: {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":

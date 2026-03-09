@@ -58,4 +58,60 @@
 #define LSCLOCK                            50     /** счетчик LS                                                                          */
 #define LST                                51     /** температура LS                                                                      */
 
+#define CPSSINIT                           52     /** запуск PSS системы                                                                  */
+#define CPSSPWRON                          53     /** PSS вкл                                                                             */
+#define CPSSPWROFF                         54     /** PSS выкл                                                                            */
+#define CPSSPWR12ON                        55     /** питание контура 12V вкл                                                             */
+#define CPSSPWR12OFF                       56     /** питание контура 12V выкл                                                            */
+#define CPSSPWR6ON                         57     /** питание контура 6V вкл                                                              */
+#define CPSSPWR6OFF                        58     /** питание контура 6V выкл                                                             */
+#define CPSSPWR5ON                         59     /** питание контура 5V вкл                                                              */
+#define CPSSPWR5OFF                        60     /** питание контура 5V выкл                                                             */
+#define CPSSPWR33ON                        61     /** питание контура 3.3V вкл                                                            */
+#define CPSSPWR33OFF                       62     /** питание контура 3.3V выкл                                                           */
+#define CPSSECOON                          63     /** режим экономии энергии вкл                                                          */
+#define CPSSECOOFF                         64     /** режим экономии энергии выкл                                                         */
+#define CPSSMAXT1                          65     /** макс температура контура 1                                                          */
+#define CPSSMAXT2                          66     /** макс температура контура 2                                                          */
+#define CPSSMAXA                           67     /** макс сила тока A батареи                                                            */
+#define CPSSMAXW                           68     /** макс мощность W батареи                                                             */
+#define CPSSMINC                           69     /** мин заряд C батареи                                                                 */
+#define CPSSMINV                           70     /** мин напряжение V батареи                                                            */
+#define CPSSMAXA12                         71     /** макс сила тока A контура 12V                                                        */
+#define CPSSMAXA6                          72     /** макс сила тока A контура 6V                                                         */
+#define CPSSMAXA5                          73     /** макс сила тока A контура 5V                                                         */
+#define CPSSMAXA33                         74     /** макс сила тока A контура 3.3V                                                       */
+#define CPSSCLOCK                          75     /** задать счетчик PSS                                                                  */
+#define CTCSINIT                           76     /** запуск TCS системы                                                                  */
+#define CTCSPWRON                          77     /** TCS вкл                                                                             */
+#define CTCSPWROFF                         78     /** TCS выкл                                                                            */
+#define CTCSPSSON                          79     /** опрос PSS вкл                                                                       */
+#define CTCSPSSOFF                         80     /** опрос PSS выкл                                                                      */
+#define CTCSTMSON                          81     /** опрос TMS вкл                                                                       */
+#define CTCSTMSOFF                         82     /** опрос TMS выкл                                                                      */
+#define CTCSMNSON                          83     /** опрос MNS вкл                                                                       */
+#define CTCSMNSOFF                         84     /** опрос MNS выкл                                                                      */
+#define CTCSLSON                           85     /** опрос LS вкл                                                                        */
+#define CTCSLSOFF                          86     /** опрос LS выкл                                                                       */
+#define CTCSFRQ                            87     /** задать скорость опроса систем                                                       */
+#define CTCSCLOCK                          88     /** задать счетчик TCS                                                                  */
+#define CTMSINIT                           89     /** запуск TMS системы                                                                  */
+#define CTMSPWRON                          90     /** TMS вкл                                                                             */
+#define CTMSPWROFF                         91     /** TMS выкл                                                                            */
+#define CTMSCLOCK                          92     /** задать счетчик TMS                                                                  */
+#define CTMSPWRFAN1                        93     /** питание кулера 1                                                                    */
+#define CTMSPWRFAN2                        94     /** питание кулера 2                                                                    */
+#define CTMSPWRFAN3                        95     /** питание кулера 3                                                                    */
+#define CTMSPWRFAN4                        96     /** питание кулера 4                                                                    */
+#define CMNSINIT                           97     /** запуск TMS системы                                                                  */
+#define CMNSPWRON                          98     /** TMS вкл                                                                             */
+#define CMNSPWROFF                         99     /** TMS выкл                                                                            */
+#define CMNSCLOCK                          100    /** задать счетчик MNS                                                                  */
+#define CLSINIT                            101    /** запуск LSсистемы                                                                    */
+#define CLSPWRON                           102    /** питание LS ыкл                                                                      */
+#define CLSPWROFF                          103    /** питание ls выкл                                                                     */
+#define CLSCLOCK                           104    /** задать счетчик LS                                                                   */
+
 #define Param_max                          52     /**                                                                                     */
+#define Comm_max                           53     /**                                                                                     */
+#define Param_Comm_max                     105    /**                                                                                     */

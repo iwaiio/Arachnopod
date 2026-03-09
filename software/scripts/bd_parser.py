@@ -678,14 +678,26 @@ def make_type_list(types: list[str]) -> str:
     return make_define_file(items, "TYPE_max", len(types))
 
 
-def make_param_list(params: list[ParamRow]) -> str:
-    items = [(sanitize_identifier(r.name), r.id, r.description) for r in params]
-    return make_define_file(items, "Param_max", max((r.id for r in params), default=0) + 1)
+def make_param_comm_list(params: list[ParamRow], commands: list[CommandRow]) -> str:
+    param_count = len(params)
+    command_count = len(commands)
+    total_count = param_count + command_count
 
+    lines: list[str] = [banner("BD.xlsx"), pad140("#pragma once"), ""]
 
-def make_command_list(commands: list[CommandRow]) -> str:
-    items = [(sanitize_identifier(r.name), r.id, r.description) for r in commands]
-    return make_define_file(items, "Comm_max", max((r.id for r in commands), default=0) + 1)
+    for row in params:
+        lines.append(make_define(sanitize_identifier(row.name), row.id, row.description))
+
+    lines.append("")
+    for row in commands:
+        lines.append(make_define(sanitize_identifier(row.name), param_count + row.id, row.description))
+    lines.append("")
+    lines.append(make_define("Param_max", param_count, ""))
+    lines.append(make_define("Comm_max", command_count, ""))
+    lines.append(make_define("Param_Comm_max", total_count, ""))
+    lines.append("")
+
+    return "\n".join(lines)
 
 
 def table_comment(name: str, desc: str) -> tuple[str, str]:
@@ -712,7 +724,7 @@ def make_param_tab(params: list[ParamRow]) -> str:
         pad140('#include "sys_list.hpp"'),
         pad140('#include "type_list.hpp"'),
         pad140('#include "alg_list.hpp"'),
-        pad140('#include "param_list.hpp"'),
+        pad140('#include "param_comm_list.hpp"'),
         "",
         pad140("#define\tTAR_NONE\t0"),
         "",
@@ -767,7 +779,7 @@ def make_command_tab(commands: list[CommandRow]) -> str:
         pad140('#include "sys_list.hpp"'),
         pad140('#include "type_list.hpp"'),
         pad140('#include "alg_list.hpp"'),
-        pad140('#include "command_list.hpp"'),
+        pad140('#include "param_comm_list.hpp"'),
         "",
         pad140("#define\tTAR_NONE\t0"),
         "",
@@ -847,11 +859,15 @@ def main() -> None:
         "sys_list.hpp": make_sys_list(systems, pstats, cstats, cs_param_bits, cs_comm_bits),
         "alg_list.hpp": make_alg_list(algs),
         "type_list.hpp": make_type_list(types),
-        "param_list.hpp": make_param_list(params),
+        "param_comm_list.hpp": make_param_comm_list(params, commands),
         "param_tab.hpp": make_param_tab(params),
-        "command_list.hpp": make_command_list(commands),
         "command_tab.hpp": make_command_tab(commands),
     }
+
+    for legacy_name in ("param_list.hpp", "command_list.hpp"):
+        legacy_path = OUTPUT_DIR / legacy_name
+        if legacy_path.exists():
+            legacy_path.unlink()
 
     for fname, content in files.items():
         write_file(OUTPUT_DIR / fname, content)

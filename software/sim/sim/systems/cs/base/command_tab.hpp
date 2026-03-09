@@ -9,7 +9,7 @@
 #include "sys_list.hpp"                                                                                                                     
 #include "type_list.hpp"                                                                                                                    
 #include "alg_list.hpp"                                                                                                                     
-#include "command_list.hpp"                                                                                                                 
+#include "param_comm_list.hpp"                                                                                                              
 
 #define	TAR_NONE	0                                                                                                                          
 

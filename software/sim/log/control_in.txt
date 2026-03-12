@@ -1,0 +1,10 @@
+cs disable
+cs cmd CPSSPWROFF 1
+cs cmd CPSSPWRON
+cs cmd pss CPSSPWROFF
+cs cmd pss CPSSPWRON
+cs cmd pss CPSSЕ1 value=999
+cs cmd pss CPSST1 value=999
+cs cmd pss CPSSMAXT1 value=999
+cs disable pss
+cs exchange pss

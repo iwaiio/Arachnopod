@@ -13,7 +13,10 @@ target_link_libraries(arachnopod_sim_systems PUBLIC
 )
 
 target_include_directories(arachnopod_sim_systems PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/base
   ${CMAKE_CURRENT_SOURCE_DIR}/bus_mock/interface
+  ${CMAKE_CURRENT_SOURCE_DIR}/control/interface
+  ${CMAKE_CURRENT_SOURCE_DIR}/sub/interface
   ${CMAKE_CURRENT_SOURCE_DIR}/cs/interface
   ${CMAKE_CURRENT_SOURCE_DIR}/pss/interface
   ${CMAKE_CURRENT_SOURCE_DIR}/tcs/interface
@@ -24,6 +27,7 @@ target_include_directories(arachnopod_sim_systems PUBLIC
 
 target_include_directories(arachnopod_sim_systems PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/bus_mock/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/control/include
   ${CMAKE_CURRENT_SOURCE_DIR}/cs/include
   ${CMAKE_CURRENT_SOURCE_DIR}/pss/include
   ${CMAKE_CURRENT_SOURCE_DIR}/tcs/include

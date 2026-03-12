@@ -4,10 +4,10 @@
 
 // --- Тактирование и симуляция ---
 // Базовая частота "логического" тика.
-#define ARP_TICK_HZ                     1000u
+#define ARP_TICK_HZ                     100u
 
 // Ускорение симуляции в процентах (100 = реальное время, 200 = x2, 50 = x0.5).
-#define ARP_SIM_SPEED_PERCENT           100u
+#define ARP_SIM_SPEED_PERCENT           2u
 
 // Температура окружающей среды.
 #define ARP_ENV_AMBIENT_TEMP_C          25
@@ -31,7 +31,10 @@
 #define ARP_FLAG_REQ_DATA_RESP          3u
 
 // Ожидание ответного сообщения от оконечного устройства (мс)
-#define ARP_BUS_RESPONSE_TIMEOUT_MS     25u
+#define ARP_BUS_RESPONSE_TIMEOUT_MS     2500u
+
+// РћР¶РёРґР°РЅРёРµ РЅР°С‡Р°Р»Р° РѕС‚РІРµС‚Р° (SOF) РІ РєР°РґСЂР°С… СЃРёРјСѓР»СЏС†РёРё.
+#define ARP_BUS_RESPONSE_TIMEOUT_FRAMES 10u
 
 // --- Адреса устройств на шине ---
 #define ARP_ADDR_CS                     0x01u

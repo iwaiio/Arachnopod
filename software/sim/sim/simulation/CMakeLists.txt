@@ -12,6 +12,7 @@ target_link_libraries(arachnopod_sim_simulation PUBLIC
 )
 
 target_include_directories(arachnopod_sim_simulation PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/base/include
   ${CMAKE_CURRENT_SOURCE_DIR}/cs/interface
   ${CMAKE_CURRENT_SOURCE_DIR}/pss/interface
   ${CMAKE_CURRENT_SOURCE_DIR}/tcs/interface

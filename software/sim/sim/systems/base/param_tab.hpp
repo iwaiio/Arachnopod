@@ -45,7 +45,7 @@ struct S_paramtab S_baseparamtab[Param_max]={
 	{SYS_PSS, TYPE_A, TYPE_UNSIGN, 0, 1, 0, 80, 0, 5, 80, 5, ALG_AN},    	/** "PSSMAXA12"                     "макс сила тока A контура 12V" */
 	{SYS_PSS, TYPE_A, TYPE_UNSIGN, 0, 1, 0, 88, 8, 5, 88, 5, ALG_AN},    	/** "PSSMAXA6"                       "макс сила тока A контура 6V" */
 	{SYS_PSS, TYPE_A, TYPE_UNSIGN, 0, 1, 0, 96, 0, 6, 96, 6, ALG_AN},    	/** "PSSMAXA5"                       "макс сила тока A контура 5V" */
-	{SYS_PSS, TYPE_A, TYPE_UNSIGN, 0, 1, 0, 104, 8, 6, 104, 6, ALG_AN},  	/** "CPSSMAXA33"                   "макс сила тока A контура 3.3V" */
+	{SYS_PSS, TYPE_A, TYPE_UNSIGN, 0, 1, 0, 104, 8, 6, 104, 6, ALG_AN},  	/** "PSSMAXA33"                    "макс сила тока A контура 3.3V" */
 	{SYS_PSS, TYPE_AP, TYPE_SIGN, 0, 1, 0, 112, 0, 7, 112, 7, ALG_AN},   	/** "PSST1"                                "температура контура 1" */
 	{SYS_PSS, TYPE_AP, TYPE_SIGN, 0, 1, 0, 128, 0, 8, 128, 8, ALG_AN},   	/** "PSST2"                                "температура контура 2" */
 	{SYS_PSS, TYPE_A, TYPE_UNSIGN, 0, 1, 0, 144, 0, 9, 144, 9, ALG_AN},  	/** "PSSA"                                   "сила тока A батареи" */
@@ -70,10 +70,10 @@ struct S_paramtab S_baseparamtab[Param_max]={
 	{SYS_TCS, TYPE_AP, TYPE_SIGN, 0, 1, 0, 32, 0, 2, 272, 17, ALG_AN},   	/** "TCST"                                       "температура TCS" */
 	{SYS_TMS, TYPE_D, TYPE_UNSIGN, 0, 1, 0, 0, 0, 0, 288, 18, ALG_AN},   	/** "TMSPWR"                                        "TMS вкл/выкл" */
 	{SYS_TMS, TYPE_A, TYPE_UNSIGN, 0, 1, 0, 8, 8, 0, 296, 18, ALG_AN},   	/** "TMSCLOCK"                                       "счетчик TMS" */
-	{SYS_TMS, TYPE_A, TYPE_UNSIGN, 0, 1, -10, 16, 0, 1, 304, 19, ALG_AC},	/** "TMSPWRFAN1"                                "питание кулера 1" */
-	{SYS_TMS, TYPE_A, TYPE_UNSIGN, 0, 1, -10, 24, 8, 1, 312, 19, ALG_AC},	/** "TMSPWRFAN2"                                "питание кулера 2" */
-	{SYS_TMS, TYPE_A, TYPE_UNSIGN, 0, 1, -10, 32, 0, 2, 320, 20, ALG_AC},	/** "TMSPWRFAN3"                                "питание кулера 3" */
-	{SYS_TMS, TYPE_A, TYPE_UNSIGN, 0, 1, -10, 40, 8, 2, 328, 20, ALG_AC},	/** "TMSPWRFAN4"                                "питание кулера 4" */
+	{SYS_TMS, TYPE_A, TYPE_UNSIGN, 0, 1, 0, 16, 0, 1, 304, 19, ALG_AC},  	/** "TMSPWRFAN1"                                "питание кулера 1" */
+	{SYS_TMS, TYPE_A, TYPE_UNSIGN, 0, 1, 0, 24, 8, 1, 312, 19, ALG_AC},  	/** "TMSPWRFAN2"                                "питание кулера 2" */
+	{SYS_TMS, TYPE_A, TYPE_UNSIGN, 0, 1, 0, 32, 0, 2, 320, 20, ALG_AC},  	/** "TMSPWRFAN3"                                "питание кулера 3" */
+	{SYS_TMS, TYPE_A, TYPE_UNSIGN, 0, 1, 0, 40, 8, 2, 328, 20, ALG_AC},  	/** "TMSPWRFAN4"                                "питание кулера 4" */
 	{SYS_TMS, TYPE_AP, TYPE_SIGN, 0, 1, 0, 48, 0, 3, 336, 21, ALG_AN},   	/** "TMST"                                       "температура TMS" */
 	{SYS_MNS, TYPE_D, TYPE_UNSIGN, 0, 1, 0, 0, 0, 0, 352, 22, ALG_AN},   	/** "MNSPWR"                                        "TMS вкл/выкл" */
 	{SYS_MNS, TYPE_A, TYPE_UNSIGN, 0, 1, 0, 8, 8, 0, 360, 22, ALG_AN},   	/** "MNSCLOCK"                                       "счетчик MNS" */

@@ -16,7 +16,9 @@ from openpyxl import load_workbook
 SCRIPT_DIR = Path(__file__).resolve().parent
 SOFTWARE_DIR = SCRIPT_DIR.parent
 EXCEL_PATH = SOFTWARE_DIR / "data_base" / "BD.xlsx"
-OUTPUT_DIR = SOFTWARE_DIR / "generated"
+OUTPUT_DIR = SOFTWARE_DIR / "sim" / "sim" / "systems" / "base"
+SIM_BASE_INCLUDE_DIR = SOFTWARE_DIR / "sim" / "sim" / "simulation" / "base" / "include"
+SIM_BASE_SRC_DIR = SOFTWARE_DIR / "sim" / "sim" / "simulation" / "base" / "src"
 
 LINE_WIDTH = 140
 BLOCK_BITS = 16
@@ -130,16 +132,6 @@ def get_by_header(row: list[Any], header_map: dict[str, int], *names: str, defau
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
-def get_by_header(row: list[Any], header_map: dict[str, int], *names: str, default: Any = None) -> Any:
-    for name in names:
-        idx = header_map.get(normalize_header(name))
-        if idx is not None and idx < len(row):
-            return row[idx]
-    return default
-
-def ensure_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-
 
 def type_size_bits(type_name: str) -> int:
     normalized = sanitize_identifier(type_name)
@@ -187,6 +179,7 @@ class BaseRow:
     description: str
     system_name: str
     type_name: str
+    type_real: str
     sign: str
     tar_a: Any
     tar_b: Any
@@ -243,6 +236,7 @@ def parse_sheet(wb, sheet_name: str, kind: str):
         raw_description = get_by_header(data, hm, "Description", default="")
         raw_system = get_by_header(data, hm, "System", default="NONE")
         raw_type = get_by_header(data, hm, "Type", default="D")
+        raw_type_real = get_by_header(data, hm, "TypeR", "Type_R")
         raw_sign = get_by_header(data, hm, "Syg", "Sign", default="U")
         raw_tar_a = get_by_header(data, hm, "tar_A")
         raw_tar_b = get_by_header(data, hm, "tar_B")
@@ -260,6 +254,7 @@ def parse_sheet(wb, sheet_name: str, kind: str):
                 raw_description,
                 raw_system,
                 raw_type,
+                raw_type_real,
                 raw_sign,
                 raw_tar_a,
                 raw_tar_b,
@@ -293,6 +288,10 @@ def parse_sheet(wb, sheet_name: str, kind: str):
         type_name = str(raw_type or "D").strip().upper() or "D"
         if raw_type in (None, ""):
             warn(f"{kind}: строка {r}, отсутствует Type -> подставлено D")
+
+        type_real = str(raw_type_real or raw_sign or "U").strip().upper() or "U"
+        if raw_type_real in (None, ""):
+            warn(f"{kind}: row {r}, missing TypeR -> fallback to Sign/Syg")
 
         sign = str(raw_sign or "U").strip().upper() or "U"
         if raw_sign in (None, ""):
@@ -336,6 +335,7 @@ def parse_sheet(wb, sheet_name: str, kind: str):
                 "description": description,
                 "system_name": system_name,
                 "type_name": type_name,
+                "type_real": type_real,
                 "sign": sign,
                 "tar_a": tar_a,
                 "tar_b": tar_b,
@@ -382,6 +382,7 @@ def parse_sheet(wb, sheet_name: str, kind: str):
                 description=item["description"],
                 system_name=item["system_name"],
                 type_name=item["type_name"],
+                type_real=item["type_real"],
                 sign=item["sign"],
                 tar_a=item["tar_a"],
                 tar_b=item["tar_b"],
@@ -419,6 +420,7 @@ def fill_id_gaps(rows: list[BaseRow], kind: str):
                 description="RESERVED",
                 system_name="NONE",
                 type_name="D",
+                type_real="U",
                 sign="U",
                 tar_a=TAR_NONE,
                 tar_b=TAR_NONE,
@@ -463,15 +465,8 @@ def ordered_unique(values: list[str], head: str = "NONE") -> list[str]:
 def collect_systems(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
     return ordered_unique([*(x.system_name for x in params), *(x.system_name for x in commands)], "NONE")
 
-def collect_algorithms(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
-    return ordered_unique([*map(lambda x: x.alg_name, params), *map(lambda x: x.alg_name, commands)])
-
 def collect_algs(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
     return ordered_unique([*(x.alg_name for x in params), *(x.alg_name for x in commands)], "NONE")
-
-def collect_types(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
-    preset = ["NONE", "D", "A", "AP", "SIGN", "UNSIGN"]
-    used = {sanitize_identifier(x) for x in preset}
 
 def collect_types(params: list[ParamRow], commands: list[CommandRow]) -> list[str]:
     base = ["NONE", "D", "A", "AP", "SIGN", "UNSIGN"]
@@ -660,8 +655,6 @@ def make_sys_list(
 
     return make_define_file(items, "SYS_max", len(filtered) + 2)
 
-    return make_define_file(items, "SYS_max", len(systems))
-
 def make_alg_list(algs: list[str]) -> str:
     items = []
     for idx, name in enumerate(algs):
@@ -684,13 +677,19 @@ def make_param_comm_list(params: list[ParamRow], commands: list[CommandRow]) -> 
     total_count = param_count + command_count
 
     lines: list[str] = [banner("BD.xlsx"), pad140("#pragma once"), ""]
+    param_names: set[str] = set()
 
     for row in params:
-        lines.append(make_define(sanitize_identifier(row.name), row.id, row.description))
+        name = sanitize_identifier(row.name)
+        lines.append(make_define(name, row.id, row.description))
+        param_names.add(name)
 
     lines.append("")
     for row in commands:
-        lines.append(make_define(sanitize_identifier(row.name), param_count + row.id, row.description))
+        name = sanitize_identifier(row.name)
+        if name in param_names:
+            lines.append(pad140(f"#undef {name}"))
+        lines.append(make_define(name, param_count + row.id, row.description))
     lines.append("")
     lines.append(make_define("Param_max", param_count, ""))
     lines.append(make_define("Comm_max", command_count, ""))
@@ -765,11 +764,6 @@ def make_param_tab(params: list[ParamRow]) -> str:
     lines.append("")
     return "\n".join(lines)
 
-    lines.extend(align_rows(init_rows, comments, commas))
-    lines.append(pad140("};"))
-    lines.append("")
-    return "\n".join(lines)
-
 def make_command_tab(commands: list[CommandRow]) -> str:
     lines = [
         banner("BD.xlsx"),
@@ -821,6 +815,338 @@ def make_command_tab(commands: list[CommandRow]) -> str:
     return "\n".join(lines)
 
 
+def system_rows(rows: list[BaseRow], system_key: str) -> list[BaseRow]:
+    selected = [r for r in rows if sanitize_identifier(r.system_name) == system_key and not r.is_placeholder]
+    return sorted(selected, key=lambda r: r.id)
+
+
+def as_contiguous_range(ids: list[int], label: str) -> tuple[int, int]:
+    if not ids:
+        return 0, 0
+
+    ordered = sorted(ids)
+    base = ordered[0]
+    expected = list(range(base, base + len(ordered)))
+    if ordered != expected:
+        warn(f"{label}: IDs are not contiguous, range will use base={base} count={len(ordered)}")
+    return base, len(ordered)
+
+
+def model_param_var_name(row: BaseRow) -> str:
+    return f"P_{sanitize_identifier(row.name)}"
+
+
+def model_param_bits(row: BaseRow) -> int:
+    width = type_size_bits(row.type_name)
+    return 16 if width > 8 else 8
+
+
+def normalize_type_real(type_real: str) -> str:
+    key = sanitize_identifier(type_real)
+    if key in ("S", "SIGN", "SIGNED", "INT", "SI", "I"):
+        return "S"
+    if key in ("U", "UNSIGN", "UNSIGNED", "UINT", "UI"):
+        return "U"
+    if key in ("FS", "F", "FLOAT", "FLOAT_SIGN", "FLOAT_SIGNED", "F8", "F16", "FLOAT8", "FLOAT16"):
+        return "FS"
+    if key in ("FU", "UF", "UFLOAT", "FLOAT_UNSIGN", "FLOAT_UNSIGNED", "UF8", "UF16", "UFLOAT8", "UFLOAT16"):
+        return "FU"
+    return key
+
+
+def model_param_is_signed(row: BaseRow) -> bool:
+    type_real = normalize_type_real(row.type_real)
+    if type_real in ("S", "FS"):
+        return True
+    if type_real in ("U", "FU"):
+        return False
+    # Fallback for legacy sheets without TypeR.
+    sign = sanitize_identifier(row.sign)
+    return sign in ("S", "FS")
+
+
+def model_param_real_kind(row: BaseRow) -> str:
+    type_real = normalize_type_real(row.type_real)
+    if type_real in ("S", "U", "FS", "FU"):
+        return type_real
+    sign = sanitize_identifier(row.sign)
+    if sign in ("S", "FS"):
+        return "S"
+    if sign in ("U", "FU"):
+        return "U"
+    fail(f"Unknown TypeR/Sign for ID={row.id} name={row.name}: TypeR='{row.type_real}' Sign='{row.sign}'")
+    return "U"
+
+
+def model_param_cpp_type(row: BaseRow) -> str:
+    bits = model_param_bits(row)
+    kind = model_param_real_kind(row)
+
+    if kind == "S":
+        return "std::int16_t" if bits == 16 else "std::int8_t"
+    if kind == "U":
+        return "std::uint16_t" if bits == 16 else "std::uint8_t"
+    if kind == "FS":
+        return "sim_base::float16_t" if bits == 16 else "sim_base::float8_t"
+    if kind == "FU":
+        return "sim_base::ufloat16_t" if bits == 16 else "sim_base::ufloat8_t"
+
+    fail(f"Unsupported TypeR for ID={row.id} name={row.name}: {row.type_real}")
+    return "std::uint8_t"
+
+
+def model_param_real_enum(row: BaseRow) -> str:
+    kind = model_param_real_kind(row)
+    if kind == "S":
+        return "sim_base::real_type_t::sint"
+    if kind == "U":
+        return "sim_base::real_type_t::uint"
+    if kind == "FS":
+        return "sim_base::real_type_t::sfloat"
+    if kind == "FU":
+        return "sim_base::real_type_t::ufloat"
+    return "sim_base::real_type_t::uint"
+
+
+def make_sys_id_range(systems: list[str], params: list[ParamRow], commands: list[CommandRow]) -> str:
+    lines: list[str] = [banner("BD.xlsx"), pad140("#pragma once"), ""]
+    param_count = len(params)
+
+    system_keys: list[str] = []
+    for name in systems:
+        key = sanitize_identifier(name)
+        if key in ("NONE", "CS") or key in system_keys:
+            continue
+        system_keys.append(key)
+
+    for key in system_keys:
+        p_rows = system_rows(params, key)
+        p_ids = [r.id for r in p_rows]
+        base, count = as_contiguous_range(p_ids, f"PARAM/{key}")
+        lines.append(make_define(f"{key}_BASE", f"{base}u", f"{key}: parameter ID base"))
+        lines.append(make_define(f"{key}_COUNT", f"{count}u", f"{key}: parameter ID count"))
+        lines.append("")
+
+    for key in system_keys:
+        c_rows = system_rows(commands, key)
+        c_ids = [param_count + r.id for r in c_rows]
+        base, count = as_contiguous_range(c_ids, f"COMM/{key}")
+        lines.append(make_define(f"C{key}_BASE", f"{base}u", f"{key}: command ID base"))
+        lines.append(make_define(f"C{key}_COUNT", f"{count}u", f"{key}: command ID count"))
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def make_sim_model_base_hpp(namespace_name: str, params_rows: list[ParamRow]) -> str:
+    param_vars = [model_param_var_name(r) for r in params_rows]
+
+    lines = [
+        banner("BD.xlsx"),
+        pad140("#pragma once"),
+        "",
+        pad140('#include "sim_base.hpp"'),
+        "",
+        pad140(f"namespace {namespace_name} {{"),
+        "",
+        pad140(f"constexpr std::size_t k_param_count = {len(param_vars)}U;"),
+        "",
+    ]
+
+    for row, name in zip(params_rows, param_vars):
+        lines.append(pad140(f"extern {model_param_cpp_type(row)} {name};"))
+
+    if param_vars:
+        lines.append("")
+
+    lines.append(pad140("inline std::array<sim_base::param_entry_t, k_param_count> PARAMS = {"))
+
+    for idx, (row, name) in enumerate(zip(params_rows, param_vars)):
+        tail = "," if idx != (len(param_vars) - 1) else ""
+        bits = model_param_bits(row)
+        signed_text = "true" if model_param_is_signed(row) else "false"
+        real_kind = model_param_real_enum(row)
+        key = sanitize_identifier(row.name)
+        lines.append(
+            pad140(
+                f'  sim_base::param_entry_t{{{row.id}, "{key}", {bits}U, {signed_text}, {real_kind}, static_cast<void*>(&{name})}}{tail}'
+            )
+        )
+
+    lines.append(pad140("};"))
+    lines.append("")
+    lines.append(pad140(f"}}  // namespace {namespace_name}"))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def make_sim_base_common_hpp() -> str:
+    lines = [
+        banner("BD.xlsx"),
+        pad140("#pragma once"),
+        "",
+        pad140("#include <algorithm>"),
+        pad140("#include <array>"),
+        pad140("#include <cstddef>"),
+        pad140("#include <cstdint>"),
+        pad140("#include <cmath>"),
+        pad140("#include <limits>"),
+        pad140("#include <mutex>"),
+        pad140("#include <string_view>"),
+        "",
+        pad140("namespace sim_base {"),
+        "",
+        pad140("// Packed real-value placeholders: C++ has no portable native 8/16-bit float."),
+        pad140("// Storage is 8/16-bit integer; fractional values are represented via fixed-point scale helpers below."),
+        pad140("using float8_t = std::int8_t;"),
+        pad140("using ufloat8_t = std::uint8_t;"),
+        pad140("using float16_t = std::int16_t;"),
+        pad140("using ufloat16_t = std::uint16_t;"),
+        "",
+        pad140("inline std::recursive_mutex& model_data_mutex() {"),
+        pad140("  static std::recursive_mutex mtx;"),
+        pad140("  return mtx;"),
+        pad140("}"),
+        "",
+        pad140("template <typename PackedT>"),
+        pad140("inline PackedT pack_fixed(const float value, float scale = 1.0F) {"),
+        pad140("  if (!(scale > 0.0F)) {"),
+        pad140("    scale = 1.0F;"),
+        pad140("  }"),
+        pad140(""),
+        pad140("  const float scaled = value * scale;"),
+        pad140("  const auto rounded = static_cast<long>(std::lround(scaled));"),
+        pad140("  const auto lo = static_cast<long>(std::numeric_limits<PackedT>::lowest());"),
+        pad140("  const auto hi = static_cast<long>(std::numeric_limits<PackedT>::max());"),
+        pad140("  const auto clamped = std::clamp(rounded, lo, hi);"),
+        pad140("  return static_cast<PackedT>(clamped);"),
+        pad140("}"),
+        pad140(""),
+        pad140("template <typename PackedT>"),
+        pad140("inline float unpack_fixed(const PackedT raw, float scale = 1.0F) {"),
+        pad140("  if (!(scale > 0.0F)) {"),
+        pad140("    scale = 1.0F;"),
+        pad140("  }"),
+        pad140("  return static_cast<float>(raw) / scale;"),
+        pad140("}"),
+        pad140(""),
+        pad140("inline float8_t pack_float8(const float value, const float scale = 1.0F) {"),
+        pad140("  return pack_fixed<float8_t>(value, scale);"),
+        pad140("}"),
+        pad140(""),
+        pad140("inline ufloat8_t pack_ufloat8(const float value, const float scale = 1.0F) {"),
+        pad140("  return pack_fixed<ufloat8_t>(std::max(0.0F, value), scale);"),
+        pad140("}"),
+        pad140(""),
+        pad140("inline float16_t pack_float16(const float value, const float scale = 1.0F) {"),
+        pad140("  return pack_fixed<float16_t>(value, scale);"),
+        pad140("}"),
+        pad140(""),
+        pad140("inline ufloat16_t pack_ufloat16(const float value, const float scale = 1.0F) {"),
+        pad140("  return pack_fixed<ufloat16_t>(std::max(0.0F, value), scale);"),
+        pad140("}"),
+        pad140(""),
+        pad140("inline float unpack_float8(const float8_t raw, const float scale = 1.0F) {"),
+        pad140("  return unpack_fixed(raw, scale);"),
+        pad140("}"),
+        pad140(""),
+        pad140("inline float unpack_ufloat8(const ufloat8_t raw, const float scale = 1.0F) {"),
+        pad140("  return unpack_fixed(raw, scale);"),
+        pad140("}"),
+        pad140(""),
+        pad140("inline float unpack_float16(const float16_t raw, const float scale = 1.0F) {"),
+        pad140("  return unpack_fixed(raw, scale);"),
+        pad140("}"),
+        pad140(""),
+        pad140("inline float unpack_ufloat16(const ufloat16_t raw, const float scale = 1.0F) {"),
+        pad140("  return unpack_fixed(raw, scale);"),
+        pad140("}"),
+        pad140(""),
+        pad140("enum class real_type_t : std::uint8_t {"),
+        pad140("  sint = 0,"),
+        pad140("  uint = 1,"),
+        pad140("  sfloat = 2,"),
+        pad140("  ufloat = 3,"),
+        pad140("};"),
+        "",
+        pad140("struct param_entry_t {"),
+        pad140("  std::uint16_t id;"),
+        pad140("  const char* key;"),
+        pad140("  std::uint8_t bits;"),
+        pad140("  bool is_signed;"),
+        pad140("  real_type_t type_r;"),
+        pad140("  void* ptr;"),
+        pad140("};"),
+        "",
+        pad140("template <std::size_t N>"),
+        pad140("inline param_entry_t* find_param_by_id(std::array<param_entry_t, N>& params, const std::uint16_t id) {"),
+        pad140("  for (auto& entry : params) {"),
+        pad140("    if (entry.id == id) {"),
+        pad140("      return &entry;"),
+        pad140("    }"),
+        pad140("  }"),
+        pad140("  return nullptr;"),
+        pad140("}"),
+        "",
+        pad140("template <std::size_t N>"),
+        pad140("inline const param_entry_t* find_param_by_id(const std::array<param_entry_t, N>& params, const std::uint16_t id) {"),
+        pad140("  for (const auto& entry : params) {"),
+        pad140("    if (entry.id == id) {"),
+        pad140("      return &entry;"),
+        pad140("    }"),
+        pad140("  }"),
+        pad140("  return nullptr;"),
+        pad140("}"),
+        "",
+        pad140("template <std::size_t N>"),
+        pad140("inline param_entry_t* find_param_by_key(std::array<param_entry_t, N>& params, const std::string_view key) {"),
+        pad140("  for (auto& entry : params) {"),
+        pad140("    if (key == entry.key) {"),
+        pad140("      return &entry;"),
+        pad140("    }"),
+        pad140("  }"),
+        pad140("  return nullptr;"),
+        pad140("}"),
+        "",
+        pad140("template <std::size_t N>"),
+        pad140("inline const param_entry_t* find_param_by_key(const std::array<param_entry_t, N>& params, const std::string_view key) {"),
+        pad140("  for (const auto& entry : params) {"),
+        pad140("    if (key == entry.key) {"),
+        pad140("      return &entry;"),
+        pad140("    }"),
+        pad140("  }"),
+        pad140("  return nullptr;"),
+        pad140("}"),
+        "",
+        pad140("}  // namespace sim_base"),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def make_sim_base_files(systems: list[str], params: list[ParamRow]) -> dict[Path, str]:
+    files: dict[Path, str] = {}
+
+    system_keys: list[str] = []
+    for name in systems:
+        key = sanitize_identifier(name)
+        if key == "NONE" or key in system_keys:
+            continue
+        system_keys.append(key)
+
+    for key in system_keys:
+        p_rows = system_rows(params, key)
+        if not p_rows:
+            continue
+
+        sys_lc = key.lower()
+        namespace_name = f"sim_{sys_lc}_base"
+        header_name = f"sim_{sys_lc}_base.hpp"
+        files[SIM_BASE_INCLUDE_DIR / header_name] = make_sim_model_base_hpp(namespace_name, p_rows)
+
+    return files
+
+
 def write_file(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8", newline="\n")
 
@@ -854,9 +1180,12 @@ def main() -> None:
     assign_cs_offsets(commands, cs_comm_base)
 
     ensure_dir(OUTPUT_DIR)
+    ensure_dir(SIM_BASE_INCLUDE_DIR)
+    ensure_dir(SIM_BASE_SRC_DIR)
 
     files = {
         "sys_list.hpp": make_sys_list(systems, pstats, cstats, cs_param_bits, cs_comm_bits),
+        "sys_id_range.hpp": make_sys_id_range(systems, params, commands),
         "alg_list.hpp": make_alg_list(algs),
         "type_list.hpp": make_type_list(types),
         "param_comm_list.hpp": make_param_comm_list(params, commands),
@@ -872,7 +1201,19 @@ def main() -> None:
     for fname, content in files.items():
         write_file(OUTPUT_DIR / fname, content)
 
+    write_file(SIM_BASE_INCLUDE_DIR / "sim_base.hpp", make_sim_base_common_hpp())
+
+    for stale in SIM_BASE_INCLUDE_DIR.glob("sim_*_base.hpp"):
+        stale.unlink()
+    for stale in SIM_BASE_SRC_DIR.glob("sim_*_base.cpp"):
+        stale.unlink()
+
+    sim_files = make_sim_base_files(systems, params)
+    for path, content in sim_files.items():
+        write_file(path, content)
+
     print(f"Generated {len(files)} files in: {OUTPUT_DIR}")
+    print(f"Generated {len(sim_files)} files in: {SIM_BASE_INCLUDE_DIR.parent}")
     print("Done!")
 
 

@@ -21,7 +21,7 @@
 #define PSSMAXA12                          13     /** макс сила тока A контура 12V                                                        */
 #define PSSMAXA6                           14     /** макс сила тока A контура 6V                                                         */
 #define PSSMAXA5                           15     /** макс сила тока A контура 5V                                                         */
-#define CPSSMAXA33                         16     /** макс сила тока A контура 3.3V                                                       */
+#define PSSMAXA33                          16     /** макс сила тока A контура 3.3V                                                       */
 #define PSST1                              17     /** температура контура 1                                                               */
 #define PSST2                              18     /** температура контура 2                                                               */
 #define PSSA                               19     /** сила тока A батареи                                                                 */

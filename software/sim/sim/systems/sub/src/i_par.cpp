@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "command_tab.hpp"
+#include "i_msg_block.hpp"
 #include "param_tab.hpp"
 
 namespace ipar {
@@ -13,7 +14,8 @@ struct resolved_item_t {
   const std::uint16_t* read_buf{nullptr};
   std::uint16_t* write_buf{nullptr};
   std::size_t block_count{0};
-  std::size_t start_bit{0};
+  std::size_t block_n{0};
+  std::uint8_t block_offset{0};
   std::uint8_t width_bits{0};
   bool is_signed{false};
   std::int8_t tar_a{0};
@@ -43,63 +45,6 @@ std::uint8_t type_width_bits(const std::uint8_t type) {
     default:
       return 0U;
   }
-}
-
-bool read_bits(const std::uint16_t* blocks,
-               const std::size_t block_count,
-               const std::size_t start_bit,
-               const std::uint8_t width_bits,
-               std::uint32_t& out_raw) {
-  if ((blocks == nullptr) || (width_bits == 0U)) {
-    return false;
-  }
-
-  const std::size_t total_bits = block_count * k_msg_block_bits;
-  if ((start_bit + width_bits) > total_bits) {
-    return false;
-  }
-
-  std::uint32_t raw = 0U;
-  for (std::uint8_t bit = 0U; bit < width_bits; ++bit) {
-    const std::size_t abs_bit = start_bit + bit;
-    const std::size_t block_n = abs_bit / k_msg_block_bits;
-    const std::size_t bit_n = abs_bit % k_msg_block_bits;
-    const std::uint32_t bit_value = (static_cast<std::uint32_t>(blocks[block_n]) >> bit_n) & 0x1U;
-    raw |= (bit_value << bit);
-  }
-
-  out_raw = raw;
-  return true;
-}
-
-bool write_bits(std::uint16_t* blocks,
-                const std::size_t block_count,
-                const std::size_t start_bit,
-                const std::uint8_t width_bits,
-                const std::uint32_t raw_value) {
-  if ((blocks == nullptr) || (width_bits == 0U)) {
-    return false;
-  }
-
-  const std::size_t total_bits = block_count * k_msg_block_bits;
-  if ((start_bit + width_bits) > total_bits) {
-    return false;
-  }
-
-  for (std::uint8_t bit = 0U; bit < width_bits; ++bit) {
-    const std::size_t abs_bit = start_bit + bit;
-    const std::size_t block_n = abs_bit / k_msg_block_bits;
-    const std::size_t bit_n = abs_bit % k_msg_block_bits;
-    const std::uint16_t mask = static_cast<std::uint16_t>(1U << bit_n);
-    const bool set = ((raw_value >> bit) & 0x1U) != 0U;
-    if (set) {
-      blocks[block_n] = static_cast<std::uint16_t>(blocks[block_n] | mask);
-    } else {
-      blocks[block_n] = static_cast<std::uint16_t>(blocks[block_n] & static_cast<std::uint16_t>(~mask));
-    }
-  }
-
-  return true;
 }
 
 std::int32_t decode_raw(const std::uint32_t raw,
@@ -299,20 +244,19 @@ status_t fill_item_layout(const std::uint16_t* read_buf,
     return status_t::bad_type;
   }
 
-  if ((block_n < 0) || (block_offset < 0) || (block_offset >= static_cast<int>(k_msg_block_bits))) {
+  if ((block_n < 0) || (static_cast<std::size_t>(block_n) >= block_count)) {
     return status_t::bad_layout;
   }
 
-  const std::size_t start_bit = (static_cast<std::size_t>(block_n) * k_msg_block_bits) + static_cast<std::size_t>(block_offset);
-  const std::size_t total_bits = block_count * k_msg_block_bits;
-  if ((start_bit + width) > total_bits) {
-    return status_t::buffer_too_small;
+  if (!imsgblock::layout_supported(width, block_offset)) {
+    return status_t::bad_layout;
   }
 
   out.read_buf = read_buf;
   out.write_buf = write_buf;
   out.block_count = block_count;
-  out.start_bit = start_bit;
+  out.block_n = static_cast<std::size_t>(block_n);
+  out.block_offset = static_cast<std::uint8_t>(block_offset);
   out.width_bits = width;
   out.is_signed = (sign == TYPE_SIGN);
   out.tar_a = tar_a;
@@ -441,7 +385,7 @@ parse_result_t IPAR(const context_t& ctx, const std::uint16_t id) {
   }
 
   std::uint32_t raw = 0U;
-  if (!read_bits(item.read_buf, item.block_count, item.start_bit, item.width_bits, raw)) {
+  if (!imsgblock::read_value(item.read_buf, item.block_count, item.block_n, item.block_offset, item.width_bits, raw)) {
     return {status_t::buffer_too_small, 0.0F};
   }
 
@@ -480,7 +424,7 @@ status_t IGEN(const context_t& ctx, const std::uint16_t id, const std::int32_t v
     return encode_status;
   }
 
-  if (!write_bits(item.write_buf, item.block_count, item.start_bit, item.width_bits, raw)) {
+  if (!imsgblock::write_value(item.write_buf, item.block_count, item.block_n, item.block_offset, item.width_bits, raw)) {
     return status_t::buffer_too_small;
   }
   return status_t::ok;

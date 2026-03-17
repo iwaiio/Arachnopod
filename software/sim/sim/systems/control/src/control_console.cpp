@@ -22,12 +22,25 @@ namespace {
 
 std::atomic<bool> G_RUNNING{false};
 std::atomic<bool> G_STOP{false};
+std::atomic<unsigned> G_ACTIVE_WORKERS{0U};
 std::mutex G_MUTEX{};
 std::array<std::deque<command_t>, static_cast<std::size_t>(target_t::count)> G_QUEUES{};
 
 std::thread G_THREAD{};
 std::thread G_FILE_THREAD{};
 config_t G_CFG{};
+
+void worker_started() {
+  G_ACTIVE_WORKERS.fetch_add(1U, std::memory_order_relaxed);
+  G_RUNNING.store(true, std::memory_order_relaxed);
+}
+
+void worker_stopped() {
+  const unsigned left = G_ACTIVE_WORKERS.fetch_sub(1U, std::memory_order_relaxed) - 1U;
+  if (left == 0U) {
+    G_RUNNING.store(false, std::memory_order_relaxed);
+  }
+}
 
 void ensure_logger() {
   if (common::log::is_initialized()) {
@@ -113,8 +126,8 @@ bool parse_line(const std::string& line, command_t& out) {
 
   std::size_t idx = 0;
   target_t target = target_t::cs;
-  target_t first_token_target = parse_target(tokens[0]);
-  if (first_token_target != target_t::any) {
+  target_t first_token_target = target_t::any;
+  if (try_parse_target(tokens[0], first_token_target)) {
     target = first_token_target;
     idx = 1;
   }
@@ -151,6 +164,19 @@ bool parse_line(const std::string& line, command_t& out) {
     if ((idx + 1) < tokens.size()) {
       cmd.arg0 = tokens[idx + 1];
     }
+    out = std::move(cmd);
+    return true;
+  }
+
+  if (verb == "focus") {
+    if ((idx + 1) < tokens.size()) {
+      cmd.arg0 = tokens[idx + 1];
+    }
+    out = std::move(cmd);
+    return true;
+  }
+
+  if (verb == "nominal") {
     out = std::move(cmd);
     return true;
   }
@@ -198,6 +224,7 @@ bool parse_line(const std::string& line, command_t& out) {
 }
 
 void console_loop() {
+  worker_started();
   ensure_logger();
 
   common::log::info("control console started");
@@ -231,7 +258,7 @@ void console_loop() {
   }
 
   common::log::info("control console stopped");
-  G_RUNNING.store(false, std::memory_order_relaxed);
+  worker_stopped();
 }
 
 std::filesystem::path resolve_log_dir() {
@@ -276,6 +303,7 @@ std::filesystem::path resolve_control_file() {
 }
 
 void file_loop(const std::filesystem::path path) {
+  worker_started();
   ensure_logger();
 
   if (path.empty()) {
@@ -342,27 +370,38 @@ void file_loop(const std::filesystem::path path) {
   }
 
   common::log::info("control file listener stopped");
+  worker_stopped();
 }
 
 }  // namespace
 
 void start(const config_t cfg) {
-  if (!cfg.enabled) {
+  if (!cfg.enabled || (!cfg.console_enabled && !cfg.file_enabled)) {
     return;
   }
   if (G_RUNNING.exchange(true, std::memory_order_relaxed)) {
+    G_RUNNING.store(true, std::memory_order_relaxed);
     return;
   }
 
   G_CFG = cfg;
   G_STOP.store(false, std::memory_order_relaxed);
-  G_THREAD = std::thread(console_loop);
-  G_THREAD.detach();
+  G_ACTIVE_WORKERS.store(0U, std::memory_order_relaxed);
+  G_RUNNING.store(false, std::memory_order_relaxed);
 
-  const auto control_file = resolve_control_file();
+  if (G_CFG.console_enabled) {
+    G_THREAD = std::thread(console_loop);
+    G_THREAD.detach();
+  }
+
+  const auto control_file = G_CFG.file_enabled ? resolve_control_file() : std::filesystem::path{};
   if (!control_file.empty()) {
     G_FILE_THREAD = std::thread(file_loop, control_file);
     G_FILE_THREAD.detach();
+  }
+
+  if (G_ACTIVE_WORKERS.load(std::memory_order_relaxed) == 0U) {
+    G_RUNNING.store(false, std::memory_order_relaxed);
   }
 }
 
@@ -406,6 +445,16 @@ void clear(const target_t target) {
   }
 
   G_QUEUES[target_index(target)].clear();
+}
+
+bool try_parse_target(const std::string_view token, target_t& out) {
+  const target_t parsed = parse_target(std::string(token));
+  if ((parsed == target_t::any) && (to_lower_copy(std::string(token)) != "any")) {
+    return false;
+  }
+
+  out = parsed;
+  return true;
 }
 
 const char* target_to_string(const target_t target) {

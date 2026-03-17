@@ -167,10 +167,12 @@ int main() {
   mock_bus_init();
 
   const char* control_env = std::getenv("ARP_CONTROL_CONSOLE");
-  const bool control_enabled = (control_env == nullptr) || (std::string(control_env) != "0");
-  if (control_enabled) {
-    control::start();
-  }
+  const bool console_enabled = (control_env == nullptr) || (std::string(control_env) != "0");
+  control::config_t control_cfg{};
+  control_cfg.enabled = true;
+  control_cfg.console_enabled = console_enabled;
+  control_cfg.file_enabled = true;
+  control::start(control_cfg);
 
   const auto period_sys = tick_period();
   const auto period_sim = period_sys * 5;

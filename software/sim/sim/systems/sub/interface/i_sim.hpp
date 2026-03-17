@@ -53,8 +53,11 @@ struct registry_t {
 void bind_registry(const registry_t* registry);
 const registry_t* bound_registry();
 
+std::int32_t ISIMI32(const value_t& value);
 status_t ISIMPAR(std::uint16_t id, value_t* out_value);
 status_t ISIMSET(std::uint16_t id, const value_t* in_value);
+status_t ISIMPARI32(std::uint16_t id, std::int32_t* out_value);
+status_t ISIMSETI32(std::uint16_t id, std::int32_t value);
 
 const char* to_string(status_t status);
 

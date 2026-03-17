@@ -7,7 +7,7 @@
 #define ARP_TICK_HZ                     100u
 
 // Ускорение симуляции в процентах (100 = реальное время, 200 = x2, 50 = x0.5).
-#define ARP_SIM_SPEED_PERCENT           2u
+#define ARP_SIM_SPEED_PERCENT           10u
 
 // Температура окружающей среды.
 #define ARP_ENV_AMBIENT_TEMP_C          25
@@ -25,10 +25,11 @@
 #define ARP_BUS_MAX_FRAME_BYTES         (1u + 2u + (ARP_BUS_MAX_DATA_BLOCKS * 2u) + 1u)
 
 // Флаги сообщения
-#define ARP_FLAG_UV                     0u
-#define ARP_FLAG_UV_RESP                1u
-#define ARP_FLAG_REQ_DATA               2u
-#define ARP_FLAG_REQ_DATA_RESP          3u
+#define ARP_FLAG_CMD_REQ                0u
+#define ARP_FLAG_CMD_RESP               1u
+#define ARP_FLAG_DATA_REQ               2u
+#define ARP_FLAG_DATA_RESP              3u
+#define ARP_FLAG_NONE                   4u
 
 // Ожидание ответного сообщения от оконечного устройства (мс)
 #define ARP_BUS_RESPONSE_TIMEOUT_MS     2500u

@@ -145,6 +145,35 @@ def type_size_bits(type_name: str) -> int:
     return 0
 
 
+def validate_block_layout(rows: list[BaseRow], label: str) -> None:
+    for row in rows:
+        if row.is_placeholder:
+            continue
+
+        width = type_size_bits(row.type_name)
+        offset = row.msg_block_offset
+
+        if row.msg_block_n < 0:
+            fail(f"{label}: {row.name} has negative MSG_Block_N={row.msg_block_n}")
+
+        if width == 16:
+            if offset != 0:
+                fail(f"{label}: {row.name} type AP must start at bit 0, got MSG_Block_Offset={offset}")
+            continue
+
+        if width == 8:
+            if offset not in (0, 8):
+                fail(f"{label}: {row.name} type A must start at bit 0 or 8, got MSG_Block_Offset={offset}")
+            continue
+
+        if width == 1:
+            if offset < 0 or offset >= BLOCK_BITS:
+                fail(f"{label}: {row.name} type D must be in bit range [0, 15], got MSG_Block_Offset={offset}")
+            continue
+
+        fail(f"{label}: unsupported width={width} for {row.name}")
+
+
 def sign_macro(sign: str) -> str:
     return "TYPE_SIGN" if sanitize_identifier(sign) == "S" else "TYPE_UNSIGN"
 
@@ -201,6 +230,19 @@ class ParamRow(BaseRow):
 @dataclass
 class CommandRow(BaseRow):
     pass
+
+
+@dataclass
+class ModelRow:
+    row_num: int
+    id: int
+    name: str
+    type_name: str
+    type_real: str
+    sign: str
+
+
+ModelLike = BaseRow | ModelRow
 
 
 @dataclass
@@ -394,6 +436,113 @@ def parse_sheet(wb, sheet_name: str, kind: str):
             )
         )
 
+    return rows
+
+
+def parse_model_sheet(wb, sheet_name: str, kind: str) -> list[ModelRow]:
+    if sheet_name not in wb.sheetnames:
+        warn(f"В книге отсутствует лист '{sheet_name}'")
+        return []
+
+    sheet = wb[sheet_name]
+    headers = [sheet.cell(1, c).value for c in range(1, sheet.max_column + 1)]
+    hm = build_header_map(headers)
+
+    raw_rows: list[dict[str, Any]] = []
+    used_ids: set[int] = set()
+
+    for r in range(2, sheet.max_row + 1):
+        data = [sheet.cell(r, c).value for c in range(1, sheet.max_column + 1)]
+
+        raw_id = get_by_header(data, hm, "ID")
+        row_id = to_int(raw_id)
+
+        raw_name = get_by_header(data, hm, "Name", default="")
+        raw_type = get_by_header(data, hm, "Type", default="D")
+        raw_type_real = get_by_header(data, hm, "TypeR", "Type_R")
+        raw_sign = get_by_header(data, hm, "Syg", "Sign", default="U")
+
+        all_empty = all(
+            x in (None, "")
+            for x in [
+                raw_id,
+                raw_name,
+                raw_type,
+                raw_type_real,
+                raw_sign,
+            ]
+        )
+        if all_empty:
+            continue
+
+        if row_id is not None:
+            if row_id in used_ids:
+                fail(f"{kind}: обнаружен повторяющийся ID={row_id} (строка {r})")
+            used_ids.add(row_id)
+
+        raw_rows.append(
+            {
+                "row_num": r,
+                "id": row_id,
+                "name": str(raw_name or "").strip(),
+                "type_name": str(raw_type or "D").strip().upper() or "D",
+                "type_real": str(raw_type_real or "").strip().upper(),
+                "sign": str(raw_sign or "U").strip().upper() or "U",
+            }
+        )
+
+    if not raw_rows:
+        warn(f"Лист '{sheet_name}' пуст")
+        return []
+
+    next_id = min(used_ids) if used_ids else 0
+
+    def allocate_id() -> int:
+        nonlocal next_id
+        while next_id in used_ids:
+            next_id += 1
+        value = next_id
+        used_ids.add(value)
+        next_id += 1
+        return value
+
+    rows: list[ModelRow] = []
+    for item in raw_rows:
+        row_id = item["id"]
+        if row_id is None:
+            row_id = allocate_id()
+            error_log(f"{kind}: строка {item['row_num']}, отсутствует ID -> присвоен автоматически ID={row_id}")
+
+        name = item["name"]
+        if not name:
+            name = f"NONE_{row_id}"
+
+        type_name = item["type_name"]
+        if not type_name:
+            warn(f"{kind}: строка {item['row_num']}, отсутствует Type -> подставлено D")
+            type_name = "D"
+
+        type_real = item["type_real"]
+        if not type_real:
+            type_real = item["sign"] or "U"
+
+        sign = item["sign"]
+        if not sign:
+            warn(f"{kind}: строка {item['row_num']}, отсутствует Sign/Syg -> подставлено U")
+            sign = "U"
+
+        rows.append(
+            ModelRow(
+                row_num=item["row_num"],
+                id=row_id,
+                name=name,
+                type_name=type_name,
+                type_real=type_real,
+                sign=sign,
+            )
+        )
+
+    rows.sort(key=lambda r: r.id)
     return rows
 
 
@@ -739,10 +888,11 @@ def make_param_tab(params: list[ParamRow]) -> str:
         field_line("char", "msg_block_n;", "номер блока данных"),
         field_line("uint16_t", "msg_cs_offset;", "глобальное смещение внутри CS"),
         field_line("char", "msg_cs_block_n;", "номер блока внутри CS"),
+        field_line("const char*", "key;", "идентификатор параметра"),
         field_line("char", "alg;", "алгоритм обработки"),
         pad140("};"),
         "",
-        pad140("struct S_paramtab S_baseparamtab[Param_max]={"),
+        pad140("inline S_paramtab S_baseparamtab[Param_max]={"),
     ]
 
     init_rows: list[str] = []
@@ -753,7 +903,8 @@ def make_param_tab(params: list[ParamRow]) -> str:
             (
                 f"\t{{SYS_{sanitize_identifier(r.system_name)}, TYPE_{sanitize_identifier(r.type_name)}, {sign_macro(r.sign)}, "
                 f"{to_cpp_number(r.tar_a)}, {to_cpp_number(r.tar_b)}, {to_cpp_number(r.tar_c)}, {r.msg_offset}, "
-                f"{r.msg_block_offset}, {r.msg_block_n}, {r.msg_cs_offset}, {r.msg_cs_block_n}, ALG_{sanitize_identifier(r.alg_name)}}}"
+                f'{r.msg_block_offset}, {r.msg_block_n}, {r.msg_cs_offset}, {r.msg_cs_block_n}, "{sanitize_identifier(r.name)}", '
+                f"ALG_{sanitize_identifier(r.alg_name)}}}"
             )
         )
         comments.append(table_comment(r.name, r.description))
@@ -789,10 +940,11 @@ def make_command_tab(commands: list[CommandRow]) -> str:
         field_line("char", "msg_block_n;", "номер блока данных"),
         field_line("uint16_t", "msg_cs_offset;", "глобальное смещение внутри CS"),
         field_line("char", "msg_cs_block_n;", "номер блока внутри CS"),
+        field_line("const char*", "key;", "идентификатор команды"),
         field_line("char", "alg;", "алгоритм обработки"),
         pad140("};"),
         "",
-        pad140("struct S_commtab S_basecommtab[Comm_max]={"),
+        pad140("inline S_commtab S_basecommtab[Comm_max]={"),
     ]
 
     init_rows: list[str] = []
@@ -803,7 +955,8 @@ def make_command_tab(commands: list[CommandRow]) -> str:
             (
                 f"\t{{SYS_{sanitize_identifier(r.system_name)}, TYPE_{sanitize_identifier(r.type_name)}, {sign_macro(r.sign)}, "
                 f"{to_cpp_number(r.tar_a)}, {to_cpp_number(r.tar_b)}, {to_cpp_number(r.tar_c)}, {r.msg_offset}, "
-                f"{r.msg_block_offset}, {r.msg_block_n}, {r.msg_cs_offset}, {r.msg_cs_block_n}, ALG_{sanitize_identifier(r.alg_name)}}}"
+                f'{r.msg_block_offset}, {r.msg_block_n}, {r.msg_cs_offset}, {r.msg_cs_block_n}, "{sanitize_identifier(r.name)}", '
+                f"ALG_{sanitize_identifier(r.alg_name)}}}"
             )
         )
         comments.append(table_comment(r.name, r.description))
@@ -832,11 +985,11 @@ def as_contiguous_range(ids: list[int], label: str) -> tuple[int, int]:
     return base, len(ordered)
 
 
-def model_param_var_name(row: BaseRow) -> str:
+def model_param_var_name(row: ModelLike) -> str:
     return f"P_{sanitize_identifier(row.name)}"
 
 
-def model_param_bits(row: BaseRow) -> int:
+def model_param_bits(row: ModelLike) -> int:
     width = type_size_bits(row.type_name)
     return 16 if width > 8 else 8
 
@@ -854,7 +1007,7 @@ def normalize_type_real(type_real: str) -> str:
     return key
 
 
-def model_param_is_signed(row: BaseRow) -> bool:
+def model_param_is_signed(row: ModelLike) -> bool:
     type_real = normalize_type_real(row.type_real)
     if type_real in ("S", "FS"):
         return True
@@ -865,7 +1018,7 @@ def model_param_is_signed(row: BaseRow) -> bool:
     return sign in ("S", "FS")
 
 
-def model_param_real_kind(row: BaseRow) -> str:
+def model_param_real_kind(row: ModelLike) -> str:
     type_real = normalize_type_real(row.type_real)
     if type_real in ("S", "U", "FS", "FU"):
         return type_real
@@ -878,7 +1031,7 @@ def model_param_real_kind(row: BaseRow) -> str:
     return "U"
 
 
-def model_param_cpp_type(row: BaseRow) -> str:
+def model_param_cpp_type(row: ModelLike) -> str:
     bits = model_param_bits(row)
     kind = model_param_real_kind(row)
 
@@ -895,7 +1048,7 @@ def model_param_cpp_type(row: BaseRow) -> str:
     return "std::uint8_t"
 
 
-def model_param_real_enum(row: BaseRow) -> str:
+def model_param_real_enum(row: ModelLike) -> str:
     kind = model_param_real_kind(row)
     if kind == "S":
         return "sim_base::real_type_t::sint"
@@ -938,7 +1091,7 @@ def make_sys_id_range(systems: list[str], params: list[ParamRow], commands: list
     return "\n".join(lines)
 
 
-def make_sim_model_base_hpp(namespace_name: str, params_rows: list[ParamRow]) -> str:
+def make_sim_model_base_hpp(namespace_name: str, params_rows: list[ModelLike]) -> str:
     param_vars = [model_param_var_name(r) for r in params_rows]
 
     lines = [
@@ -1078,6 +1231,42 @@ def make_sim_base_common_hpp() -> str:
         pad140("  void* ptr;"),
         pad140("};"),
         "",
+        pad140("inline void zero_param(param_entry_t& entry) {"),
+        pad140("  if (entry.ptr == nullptr) {"),
+        pad140("    return;"),
+        pad140("  }"),
+        pad140(""),
+        pad140("  if (entry.bits <= 8U) {"),
+        pad140("    if (entry.type_r == real_type_t::sfloat) {"),
+        pad140("      *static_cast<float8_t*>(entry.ptr) = 0;"),
+        pad140("    } else if (entry.type_r == real_type_t::ufloat) {"),
+        pad140("      *static_cast<ufloat8_t*>(entry.ptr) = 0;"),
+        pad140("    } else if (entry.is_signed) {"),
+        pad140("      *static_cast<std::int8_t*>(entry.ptr) = 0;"),
+        pad140("    } else {"),
+        pad140("      *static_cast<std::uint8_t*>(entry.ptr) = 0;"),
+        pad140("    }"),
+        pad140("    return;"),
+        pad140("  }"),
+        pad140(""),
+        pad140("  if (entry.type_r == real_type_t::sfloat) {"),
+        pad140("    *static_cast<float16_t*>(entry.ptr) = 0;"),
+        pad140("  } else if (entry.type_r == real_type_t::ufloat) {"),
+        pad140("    *static_cast<ufloat16_t*>(entry.ptr) = 0;"),
+        pad140("  } else if (entry.is_signed) {"),
+        pad140("    *static_cast<std::int16_t*>(entry.ptr) = 0;"),
+        pad140("  } else {"),
+        pad140("    *static_cast<std::uint16_t*>(entry.ptr) = 0;"),
+        pad140("  }"),
+        pad140("}"),
+        "",
+        pad140("template <std::size_t N>"),
+        pad140("inline void zero_params(std::array<param_entry_t, N>& params) {"),
+        pad140("  for (auto& entry : params) {"),
+        pad140("    zero_param(entry);"),
+        pad140("  }"),
+        pad140("}"),
+        "",
         pad140("template <std::size_t N>"),
         pad140("inline param_entry_t* find_param_by_id(std::array<param_entry_t, N>& params, const std::uint16_t id) {"),
         pad140("  for (auto& entry : params) {"),
@@ -1124,7 +1313,9 @@ def make_sim_base_common_hpp() -> str:
     return "\n".join(lines)
 
 
-def make_sim_base_files(systems: list[str], params: list[ParamRow]) -> dict[Path, str]:
+def make_sim_base_files(systems: list[str],
+                        params: list[ParamRow],
+                        skip_systems: set[str] | None = None) -> dict[Path, str]:
     files: dict[Path, str] = {}
 
     system_keys: list[str] = []
@@ -1134,7 +1325,13 @@ def make_sim_base_files(systems: list[str], params: list[ParamRow]) -> dict[Path
             continue
         system_keys.append(key)
 
+    skip_keys: set[str] = set()
+    if skip_systems:
+        skip_keys = {sanitize_identifier(x) for x in skip_systems}
+
     for key in system_keys:
+        if key in skip_keys:
+            continue
         p_rows = system_rows(params, key)
         if not p_rows:
             continue
@@ -1156,10 +1353,13 @@ def main() -> None:
 
     params_raw = parse_sheet(wb, "Params", "Params")
     commands_raw = parse_sheet(wb, "Commands", "Commands")
+    cs_model_rows = parse_model_sheet(wb, "CS_Params", "CS_Params")
 
     params = cast_params(fill_id_gaps(params_raw, "Params"))
     commands = cast_commands(fill_id_gaps(commands_raw, "Commands"))
 
+    validate_block_layout(params, "Params")
+    validate_block_layout(commands, "Commands")
     check_overlaps(params, "Params")
     check_overlaps(commands, "Commands")
 
@@ -1201,14 +1401,20 @@ def main() -> None:
     for fname, content in files.items():
         write_file(OUTPUT_DIR / fname, content)
 
-    write_file(SIM_BASE_INCLUDE_DIR / "sim_base.hpp", make_sim_base_common_hpp())
-
     for stale in SIM_BASE_INCLUDE_DIR.glob("sim_*_base.hpp"):
         stale.unlink()
     for stale in SIM_BASE_SRC_DIR.glob("sim_*_base.cpp"):
         stale.unlink()
 
-    sim_files = make_sim_base_files(systems, params)
+    skip_systems: set[str] = set()
+    if cs_model_rows:
+        skip_systems = {"CS"}
+
+    sim_files = make_sim_base_files(systems, params, skip_systems)
+    if cs_model_rows:
+        sim_files[SIM_BASE_INCLUDE_DIR / "sim_cs_base.hpp"] = make_sim_model_base_hpp(
+            "sim_cs_base", cs_model_rows
+        )
     for path, content in sim_files.items():
         write_file(path, content)
 

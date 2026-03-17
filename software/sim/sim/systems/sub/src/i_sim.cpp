@@ -1,6 +1,7 @@
 #include "i_sim.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <mutex>
 
 #include "sim_base.hpp"
@@ -24,6 +25,10 @@ const binding_t* find_binding(const registry_t& registry, const std::uint16_t id
     return nullptr;
   }
   return it;
+}
+
+std::int32_t clamp_to_range(const std::int32_t value, const std::int32_t lo, const std::int32_t hi) {
+  return std::clamp(value, lo, hi);
 }
 
 status_t read_typed_value(const binding_t& binding, value_t* out_value) {
@@ -110,6 +115,27 @@ const registry_t* bound_registry() {
   return G_REGISTRY;
 }
 
+std::int32_t ISIMI32(const value_t& value) {
+  switch (value.kind) {
+    case value_kind_t::u8:
+      return static_cast<std::int32_t>(value.data.u8);
+    case value_kind_t::s8:
+      return static_cast<std::int32_t>(value.data.s8);
+    case value_kind_t::u16:
+      return static_cast<std::int32_t>(value.data.u16);
+    case value_kind_t::s16:
+      return static_cast<std::int32_t>(value.data.s16);
+    case value_kind_t::u32:
+      return static_cast<std::int32_t>(value.data.u32);
+    case value_kind_t::s32:
+      return value.data.s32;
+    case value_kind_t::f32:
+      return static_cast<std::int32_t>(std::lround(value.data.f32));
+    default:
+      return 0;
+  }
+}
+
 status_t ISIMPAR(const std::uint16_t id, value_t* out_value) {
   if (G_REGISTRY == nullptr) {
     return status_t::no_registry;
@@ -136,6 +162,66 @@ status_t ISIMSET(const std::uint16_t id, const value_t* in_value) {
   }
 
   return write_typed_value(*binding, in_value);
+}
+
+status_t ISIMPARI32(const std::uint16_t id, std::int32_t* out_value) {
+  if (out_value == nullptr) {
+    return status_t::bad_argument;
+  }
+
+  value_t value{};
+  const status_t status = ISIMPAR(id, &value);
+  if (status != status_t::ok) {
+    return status;
+  }
+
+  *out_value = ISIMI32(value);
+  return status_t::ok;
+}
+
+status_t ISIMSETI32(const std::uint16_t id, const std::int32_t value) {
+  if (G_REGISTRY == nullptr) {
+    return status_t::no_registry;
+  }
+
+  std::lock_guard<std::recursive_mutex> lock(sim_base::model_data_mutex());
+  const binding_t* binding = find_binding(*G_REGISTRY, id);
+  if (binding == nullptr) {
+    return status_t::id_not_found;
+  }
+
+  value_t payload{};
+  payload.kind = binding->kind;
+  switch (binding->kind) {
+    case value_kind_t::u8:
+      payload.data.u8 = static_cast<std::uint8_t>(clamp_to_range(value, 0, 255));
+      break;
+    case value_kind_t::s8:
+      payload.data.s8 = static_cast<std::int8_t>(clamp_to_range(value, -128, 127));
+      break;
+    case value_kind_t::u16:
+      payload.data.u16 = static_cast<std::uint16_t>(clamp_to_range(value, 0, 65535));
+      break;
+    case value_kind_t::s16:
+      payload.data.s16 = static_cast<std::int16_t>(clamp_to_range(value, -32768, 32767));
+      break;
+    case value_kind_t::u32:
+      if (value < 0) {
+        return status_t::value_out_of_range;
+      }
+      payload.data.u32 = static_cast<std::uint32_t>(value);
+      break;
+    case value_kind_t::s32:
+      payload.data.s32 = value;
+      break;
+    case value_kind_t::f32:
+      payload.data.f32 = static_cast<float>(value);
+      break;
+    default:
+      return status_t::type_mismatch;
+  }
+
+  return write_typed_value(*binding, &payload);
 }
 
 const char* to_string(const status_t status) {

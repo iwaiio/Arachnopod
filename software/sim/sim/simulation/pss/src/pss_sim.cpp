@@ -167,38 +167,7 @@ void apply_control_limits() {
 }
 
 void set_defaults() {
-  sim_pss_base::P_PSSPWR = 0U;
-  sim_pss_base::P_PSSPWR12 = 0U;
-  sim_pss_base::P_PSSPWR6 = 0U;
-  sim_pss_base::P_PSSPWR5 = 0U;
-  sim_pss_base::P_PSSPWR33 = 0U;
-  sim_pss_base::P_PSSECO = 0U;
-
-  sim_pss_base::P_PSSMAXT1 = 0;
-  sim_pss_base::P_PSSMAXT2 = 0;
-  sim_pss_base::P_PSSMAXA = 0;
-  sim_pss_base::P_PSSMAXW = 0;
-  sim_pss_base::P_PSSMINC = 0;
-  sim_pss_base::P_PSSMINV = 0;
-  sim_pss_base::P_PSSMAXA12 = 0;
-  sim_pss_base::P_PSSMAXA6 = 0;
-  sim_pss_base::P_PSSMAXA5 = 0;
-  sim_pss_base::P_PSSMAXA33 = 0;
-
-  sim_pss_base::P_PSST1 = 0;
-  sim_pss_base::P_PSST2 = 0;
-  sim_pss_base::P_PSSA = 0;
-  sim_pss_base::P_PSSW = 0;
-  sim_pss_base::P_PSSV = 0;
-  sim_pss_base::P_PSSC = 0;
-  sim_pss_base::P_PSSA12 = 0;
-  sim_pss_base::P_PSSV12 = 0;
-  sim_pss_base::P_PSSA6 = 0;
-  sim_pss_base::P_PSSV6 = 0;
-  sim_pss_base::P_PSSA5 = 0;
-  sim_pss_base::P_PSSV5 = 0;
-  sim_pss_base::P_PSSA33 = 0;
-  sim_pss_base::P_PSSV33 = 0;
+  sim_base::zero_params(sim_pss_base::PARAMS);
 }
 
 void simulate_physics() {

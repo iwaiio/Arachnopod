@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace control {
 
@@ -29,6 +30,8 @@ struct command_t {
 struct config_t {
   bool enabled{true};
   bool echo{false};
+  bool console_enabled{true};
+  bool file_enabled{true};
 };
 
 void start(config_t cfg = {});
@@ -38,6 +41,7 @@ bool is_running();
 bool pop_command(target_t target, command_t& out);
 void clear(target_t target = target_t::any);
 
+bool try_parse_target(std::string_view token, target_t& out);
 const char* target_to_string(target_t target);
 
 }  // namespace control

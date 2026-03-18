@@ -19,6 +19,27 @@ enum class queue_class_t : std::uint8_t {
   priority,
 };
 
+enum class completion_kind_t : std::uint8_t {
+  command = 0,
+  data_request,
+};
+
+enum class completion_result_t : std::uint8_t {
+  none = 0,
+  success,
+  timeout,
+  invalid_eof,
+};
+
+struct completion_t {
+  bool valid{false};
+  control::target_t target{control::target_t::any};
+  completion_kind_t kind{completion_kind_t::data_request};
+  bool periodic{false};
+  bool have_result{false};
+  completion_result_t result{completion_result_t::none};
+};
+
 struct context_t {
   const ipar::context_t* ipar_ctx{nullptr};
   std::uint16_t* msg_com{nullptr};
@@ -43,8 +64,8 @@ task_id_t enqueue_command(control::target_t target,
 bool cancel_periodic_exchange(control::target_t target);
 bool cancel_task(task_id_t task_id);
 std::size_t cancel_target(control::target_t target);
+bool try_pop_completion(completion_t& out);
 
-void local_algorithm();
 void exchange_control(isysalgo::bus_state_t& bus);
 
 }  // namespace cs::scheduler

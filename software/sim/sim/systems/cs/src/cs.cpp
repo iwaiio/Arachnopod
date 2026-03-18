@@ -1,6 +1,7 @@
 #include "i_cs.hpp"
 
 #include "cs.hpp"
+#include "cs_control_bridge.hpp"
 #include "cs_operating_mode.hpp"
 #include "cs_scheduler.hpp"
 #include "cs_systems.hpp"
@@ -33,6 +34,9 @@ runtime_state_t G_RUNTIME{};
 isysalgo::bus_state_t G_BUS{};
 bool G_BUS_READY = false;
 bool G_LOGGER_READY = false;
+std::uint64_t G_LAST_TICK_LOG_COUNT = 0U;
+
+constexpr std::uint32_t k_tick_log_period = 32U;
 
 void ensure_logger_initialized() {
   if (G_LOGGER_READY) {
@@ -88,6 +92,12 @@ void log_tick_state(void*) {
   if (!G_LOGGER_READY) {
     return;
   }
+  const bool should_log = (G_RUNTIME.tick.count <= 1U) || (G_RUNTIME.tick.clock == 1U) ||
+                          (G_RUNTIME.tick.count >= (G_LAST_TICK_LOG_COUNT + k_tick_log_period));
+  if (!should_log) {
+    return;
+  }
+  G_LAST_TICK_LOG_COUNT = G_RUNTIME.tick.count;
 
   std::ostringstream oss;
   oss << "tick: count=" << G_RUNTIME.tick.count << " clock=" << static_cast<unsigned>(G_RUNTIME.tick.clock);
@@ -95,7 +105,7 @@ void log_tick_state(void*) {
 }
 
 void local_algorithm(void*) {
-  scheduler::local_algorithm();
+  control_bridge::step();
   operating_mode::step();
   systems::step();
 }
@@ -171,6 +181,7 @@ void runtime_init() {
 
   G_RUNTIME = runtime_state_t{};
   G_RUNTIME.initialized = true;
+  G_LAST_TICK_LOG_COUNT = 0U;
 }
 
 void runtime_step(const std::uint32_t tick) {

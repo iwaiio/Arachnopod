@@ -114,6 +114,21 @@ target_t parse_target(const std::string& token) {
 }
 
 void enqueue_command(command_t&& cmd) {
+  if (common::log::is_initialized()) {
+    std::ostringstream oss;
+    oss << "control: queued target=" << target_to_string(cmd.target) << " verb=" << cmd.verb;
+    if (!cmd.arg0.empty()) {
+      oss << " arg0=" << cmd.arg0;
+    }
+    if (!cmd.arg1.empty()) {
+      oss << " arg1=" << cmd.arg1;
+    }
+    if (cmd.has_value) {
+      oss << " value=" << cmd.value;
+    }
+    common::log::info(oss.str());
+  }
+
   std::lock_guard<std::mutex> lock(G_MUTEX);
   G_QUEUES[target_index(cmd.target)].push_back(std::move(cmd));
 }
@@ -177,6 +192,14 @@ bool parse_line(const std::string& line, command_t& out) {
   }
 
   if (verb == "nominal") {
+    out = std::move(cmd);
+    return true;
+  }
+
+  if (verb == "status") {
+    if ((idx + 1) < tokens.size()) {
+      cmd.arg0 = tokens[idx + 1];
+    }
     out = std::move(cmd);
     return true;
   }

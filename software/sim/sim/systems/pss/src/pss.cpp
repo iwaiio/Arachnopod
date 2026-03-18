@@ -24,6 +24,7 @@ namespace pss {
 namespace {
 
 bool G_LOGGER_READY = false;
+constexpr std::uint32_t k_tick_log_period = 32U;
 
 isys::msg_storage_t<1> MSG_HEADER{};
 isys::msg_storage_t<PSS_COMM_MSG_BLOCKS> MSG_COM_BUF{};
@@ -52,6 +53,7 @@ struct runtime_state_t {
 runtime_state_t G_RUNTIME{};
 isysalgo::bus_state_t G_BUS{};
 bool G_BUS_READY = false;
+std::uint64_t G_LAST_TICK_LOG_COUNT = 0U;
 
 std::array<isim::binding_t, static_cast<std::size_t>(PSS_COUNT)> G_ISIM_BINDINGS{};
 isim::registry_t G_ISIM_REGISTRY{};
@@ -177,6 +179,12 @@ void log_tick_state() { // Log tick counters
   if (!G_LOGGER_READY) {
     return;
   }
+  const bool should_log = (G_RUNTIME.tick.count <= 1U) || (G_RUNTIME.tick.clock == 1U) ||
+                          (G_RUNTIME.tick.count >= (G_LAST_TICK_LOG_COUNT + k_tick_log_period));
+  if (!should_log) {
+    return;
+  }
+  G_LAST_TICK_LOG_COUNT = G_RUNTIME.tick.count;
 
   std::ostringstream oss;
   oss << "tick: count=" << G_RUNTIME.tick.count << " clock=" << static_cast<unsigned>(G_RUNTIME.tick.clock);
@@ -315,6 +323,7 @@ void runtime_init() { // Initialize PSS runtime state
 
   G_RUNTIME = runtime_state_t{};
   G_RUNTIME.initialized = true;
+  G_LAST_TICK_LOG_COUNT = 0U;
 
   if (G_LOGGER_READY) {
     common::log::info("runtime initialized");

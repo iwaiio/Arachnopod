@@ -140,6 +140,11 @@ std::uint8_t calc_nblocks(const bus_state_t& state) {
   return 0;
 }
 
+void mark_result(bus_state_t& state, const exchange_result_t result) {
+  state.last_result = result;
+  state.result_ready = true;
+}
+
 void reset_to_idle(bus_state_t& state) {
   state.exchange_flag = exchange_flag_t::rx;
   state.rx_flag = rx_flag_t::rx_sof;
@@ -252,6 +257,36 @@ bool IBUS_SET_PAR_FRAME(bus_state_t& state, const std::size_t offset_blocks, con
   return true;
 }
 
+void IBUS_CLEAR_RESULT(bus_state_t& state) {
+  state.result_ready = false;
+  state.last_result = exchange_result_t::none;
+}
+
+bool IBUS_TAKE_RESULT(bus_state_t& state, exchange_result_t& out_result) {
+  if (!state.result_ready) {
+    return false;
+  }
+
+  out_result = state.last_result;
+  state.result_ready = false;
+  state.last_result = exchange_result_t::none;
+  return true;
+}
+
+const char* IBUS_RESULT_TO_STRING(const exchange_result_t result) {
+  switch (result) {
+    case exchange_result_t::success:
+      return "success";
+    case exchange_result_t::timeout:
+      return "timeout";
+    case exchange_result_t::invalid_eof:
+      return "invalid_eof";
+    case exchange_result_t::none:
+    default:
+      return "none";
+  }
+}
+
 void ISYS_SYNC_MSGCOM_TO_BUF(bus_state_t& state) {
   if (!state.msg_com_u16 || !state.msg_com_buf_u16) {
     return;
@@ -352,6 +387,7 @@ void IBUS_RX_EXCHANGE(bus_state_t& state, const bus_hooks_t& hooks, void* user) 
   if ((state.role == bus_role_t::master) && state.exchange_busy) {
     ++state.exchange_wait_clock;
     if (state.exchange_wait_clock > ARP_BUS_RESPONSE_TIMEOUT_FRAMES) {
+      mark_result(state, exchange_result_t::timeout);
       call_hook_state(hooks.on_error, user, state);
       reset_to_idle(state);
       return;
@@ -444,12 +480,12 @@ void IRX_DATA(bus_state_t& state, const bus_hooks_t&, void*) {
       state.msg_adr_flag && (state.msg_flag == ARP_FLAG_CMD_REQ || state.msg_flag == ARP_FLAG_DATA_RESP);
 
   std::uint8_t value = 0;
-  if (read_allowed) {
-    if (!read_bus(&value)) {
-      return;
-    }
-    state.exchange_wait_clock = 0;
+  if (!read_bus(&value)) {
+    return;
+  }
+  state.exchange_wait_clock = 0;
 
+  if (read_allowed) {
     const std::size_t index = static_cast<std::size_t>(state.exchange_sub_clock);
     if (state.msg_flag == ARP_FLAG_CMD_REQ) {
       if (index < com_capacity_bytes(state)) {
@@ -481,7 +517,13 @@ void IRX_EOF(bus_state_t& state, const bus_hooks_t& hooks, void* user) {
   const bool eof_ok = read_bus(&value) && (value == ARP_BUS_EOF);
 
   if (!eof_ok) {
+    mark_result(state, exchange_result_t::invalid_eof);
     call_hook_state(hooks.on_error, user, state);
+    reset_to_idle(state);
+    return;
+  }
+
+  if (!state.msg_adr_flag) {
     reset_to_idle(state);
     return;
   }
@@ -517,6 +559,10 @@ void IRX_EOF(bus_state_t& state, const bus_hooks_t& hooks, void* user) {
                 state.msg_par_blocks,
                 state.msg_par_frame_offset_blocks,
                 par_frame_blocks(state));
+  }
+
+  if (state.role == bus_role_t::master) {
+    mark_result(state, exchange_result_t::success);
   }
 
   reset_to_idle(state);

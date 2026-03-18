@@ -1,17 +1,13 @@
 #include "cs_scheduler.hpp"
 
 #include <array>
-#include <cctype>
 #include <cstdint>
 #include <deque>
 #include <sstream>
-#include <string_view>
 
 #include "../../base/command_tab.hpp"
 #include "../../base/param_tab.hpp"
-#include "cs_operating_mode.hpp"
 #include "common.hpp"
-#include "i_control_console.hpp"
 #include "i_sys.hpp"
 #include "i_sys_algo.hpp"
 
@@ -21,6 +17,7 @@ namespace {
 constexpr std::size_t k_max_tasks = 32U;
 constexpr std::size_t k_invalid_slot = static_cast<std::size_t>(-1);
 constexpr task_id_t k_invalid_task_id = 0U;
+constexpr std::size_t k_priority_burst_limit = 3U;
 
 enum class task_kind_t : std::uint8_t {
   command = 0,
@@ -58,6 +55,17 @@ struct task_t {
   bool has_value{false};
 };
 
+struct task_completion_t {
+  bool valid{false};
+  std::uint32_t id{0};
+  control::target_t target{control::target_t::any};
+  const char* target_name{""};
+  task_kind_t kind{task_kind_t::data_request};
+  bool periodic{false};
+  isysalgo::exchange_result_t result{isysalgo::exchange_result_t::none};
+  bool have_result{false};
+};
+
 context_t G_CTX{};
 bool G_READY = false;
 std::uint32_t G_NEXT_TASK_ID = 1U;
@@ -74,6 +82,8 @@ std::array<node_layout_t, 5> G_NODES{{
 std::array<task_t, k_max_tasks> G_TASKS{};
 std::deque<std::size_t> G_NORMAL_QUEUE{};
 std::deque<std::size_t> G_PRIORITY_QUEUE{};
+std::deque<completion_t> G_COMPLETIONS{};
+std::size_t G_PRIORITY_BURST = 0U;
 
 void log_info(const std::string& message) {
   common::log::info(message);
@@ -83,20 +93,32 @@ void log_warning(const std::string& message) {
   common::log::warning(message);
 }
 
-bool iequals_ascii(const std::string_view lhs, const std::string_view rhs) {
-  if (lhs.size() != rhs.size()) {
-    return false;
+const char* task_kind_to_string(const task_kind_t kind) {
+  switch (kind) {
+    case task_kind_t::command:
+      return "cmd";
+    case task_kind_t::data_request:
+    default:
+      return "data";
   }
+}
 
-  for (std::size_t i = 0; i < lhs.size(); ++i) {
-    const auto l = static_cast<unsigned char>(lhs[i]);
-    const auto r = static_cast<unsigned char>(rhs[i]);
-    if (std::tolower(l) != std::tolower(r)) {
-      return false;
-    }
+completion_kind_t to_public_completion_kind(const task_kind_t kind) {
+  return (kind == task_kind_t::command) ? completion_kind_t::command : completion_kind_t::data_request;
+}
+
+completion_result_t to_public_completion_result(const isysalgo::exchange_result_t result) {
+  switch (result) {
+    case isysalgo::exchange_result_t::success:
+      return completion_result_t::success;
+    case isysalgo::exchange_result_t::timeout:
+      return completion_result_t::timeout;
+    case isysalgo::exchange_result_t::invalid_eof:
+      return completion_result_t::invalid_eof;
+    case isysalgo::exchange_result_t::none:
+    default:
+      return completion_result_t::none;
   }
-
-  return true;
 }
 
 const node_layout_t* find_node_by_target(const control::target_t target) {
@@ -224,12 +246,33 @@ std::size_t pop_next_task_slot() {
     return k_invalid_slot;
   };
 
-  const std::size_t priority_slot = pop_valid(G_PRIORITY_QUEUE);
-  if (priority_slot != k_invalid_slot) {
-    return priority_slot;
+  const bool have_priority = !G_PRIORITY_QUEUE.empty();
+  const bool have_normal = !G_NORMAL_QUEUE.empty();
+
+  if (have_priority && (!have_normal || (G_PRIORITY_BURST < k_priority_burst_limit))) {
+    const std::size_t priority_slot = pop_valid(G_PRIORITY_QUEUE);
+    if (priority_slot != k_invalid_slot) {
+      ++G_PRIORITY_BURST;
+      return priority_slot;
+    }
   }
 
-  return pop_valid(G_NORMAL_QUEUE);
+  const std::size_t normal_slot = pop_valid(G_NORMAL_QUEUE);
+  if (normal_slot != k_invalid_slot) {
+    G_PRIORITY_BURST = 0U;
+    return normal_slot;
+  }
+
+  if (have_priority) {
+    const std::size_t priority_slot = pop_valid(G_PRIORITY_QUEUE);
+    if (priority_slot != k_invalid_slot) {
+      ++G_PRIORITY_BURST;
+      return priority_slot;
+    }
+  }
+
+  G_PRIORITY_BURST = 0U;
+  return k_invalid_slot;
 }
 
 task_queue_t to_task_queue(const queue_class_t queue) {
@@ -332,19 +375,6 @@ void update_task_queue_class(const std::size_t slot, const task_queue_t queue_ki
   }
 }
 
-std::uint16_t find_command_id_by_key(const node_layout_t& node, const std::string_view key) {
-  for (std::size_t i = 0; i < Comm_max; ++i) {
-    const auto& entry = S_basecommtab[i];
-    if (static_cast<std::uint8_t>(entry.sys_id) != node.system_id) {
-      continue;
-    }
-    if ((entry.key != nullptr) && iequals_ascii(entry.key, key)) {
-      return static_cast<std::uint16_t>(Param_max + i);
-    }
-  }
-  return 0U;
-}
-
 void clear_command_window(const node_layout_t& node) {
   if ((G_CTX.msg_com == nullptr) || (G_CTX.msg_com_buf == nullptr)) {
     return;
@@ -358,12 +388,24 @@ void clear_command_window(const node_layout_t& node) {
   isys::ISYSCLEAR(G_CTX.msg_com_buf + node.com_cs_base_block, node.com_blocks);
 }
 
-void finalize_active_task(isysalgo::bus_state_t& bus) {
+task_completion_t finalize_active_task(isysalgo::bus_state_t& bus) {
   if (G_ACTIVE_TASK_SLOT == k_invalid_slot) {
-    return;
+    return {};
   }
 
   auto& task = G_TASKS[G_ACTIVE_TASK_SLOT];
+  isysalgo::exchange_result_t result = isysalgo::exchange_result_t::none;
+  const bool have_result = isysalgo::IBUS_TAKE_RESULT(bus, result);
+  task_completion_t completion{
+      .valid = true,
+      .id = task.id,
+      .target = (task.node != nullptr) ? task.node->target : control::target_t::any,
+      .target_name = (task.node != nullptr) ? task.node->name : "",
+      .kind = task.kind,
+      .periodic = task.periodic,
+      .result = result,
+      .have_result = have_result,
+  };
   task.active = false;
   isysalgo::IBUS_RESET_FRAME_LAYOUT(bus);
 
@@ -378,6 +420,7 @@ void finalize_active_task(isysalgo::bus_state_t& bus) {
   }
 
   G_ACTIVE_TASK_SLOT = k_invalid_slot;
+  return completion;
 }
 
 void prepare_command_task(const task_t& task, isysalgo::bus_state_t& bus) {
@@ -410,6 +453,12 @@ void start_task(const std::size_t slot, isysalgo::bus_state_t& bus) {
   if (!task.used || !task.enabled || (task.node == nullptr)) {
     return;
   }
+  if (task.active) {
+    std::ostringstream oss;
+    oss << "cs scheduler: attempted to start active task id=" << task.id << " target=" << task.node->name;
+    log_warning(oss.str());
+    return;
+  }
 
   isysalgo::IBUS_RESET_FRAME_LAYOUT(bus);
   if (task.kind == task_kind_t::command) {
@@ -428,13 +477,14 @@ void start_task(const std::size_t slot, isysalgo::bus_state_t& bus) {
   bus.msg_n_blocks = 0;
   bus.exchange_sub_clock = 0;
   bus.exchange_wait_clock = 0;
+  isysalgo::IBUS_CLEAR_RESULT(bus);
 
   task.active = true;
   G_ACTIVE_TASK_SLOT = slot;
 
   std::ostringstream oss;
   oss << "cs scheduler: start task id=" << task.id << " target=" << task.node->name
-      << " kind=" << ((task.kind == task_kind_t::command) ? "cmd" : "data");
+      << " kind=" << task_kind_to_string(task.kind);
   log_info(oss.str());
 }
 
@@ -444,141 +494,6 @@ void start_next_task(isysalgo::bus_state_t& bus) {
     return;
   }
   start_task(slot, bus);
-}
-
-void handle_exchange_command(const control::command_t& command) {
-  control::target_t target = control::target_t::any;
-  if (!control::try_parse_target(command.arg0, target)) {
-    log_warning("control: unknown exchange target: " + command.arg0);
-    return;
-  }
-  const auto* node = find_node_by_target(target);
-  if (node == nullptr) {
-    log_warning("control: unsupported exchange target: " + command.arg0);
-    return;
-  }
-
-  (void)enqueue_exchange(target);
-}
-
-void handle_enable_command(const control::command_t& command) {
-  control::target_t target = control::target_t::any;
-  if (!control::try_parse_target(command.arg0, target)) {
-    log_warning("control: unknown enable target: " + command.arg0);
-    return;
-  }
-  if (!operating_mode::set_background_target_enabled(target, true)) {
-    log_warning("control: unsupported enable target: " + command.arg0);
-    return;
-  }
-  log_info("control: periodic exchange enabled for " + command.arg0);
-}
-
-void handle_disable_command(const control::command_t& command) {
-  control::target_t target = control::target_t::any;
-  if (!control::try_parse_target(command.arg0, target)) {
-    log_warning("control: unknown disable target: " + command.arg0);
-    return;
-  }
-  if (!operating_mode::set_background_target_enabled(target, false)) {
-    log_warning("control: unsupported disable target: " + command.arg0);
-    return;
-  }
-  log_info("control: periodic exchange disabled for " + command.arg0);
-}
-
-void handle_cmd_command(const control::command_t& command) {
-  control::target_t target = control::target_t::any;
-  if (!control::try_parse_target(command.arg0, target)) {
-    log_warning("control: unknown cmd target: " + command.arg0);
-    return;
-  }
-  const auto* node = find_node_by_target(target);
-  if (node == nullptr) {
-    log_warning("control: unsupported cmd target: " + command.arg0);
-    return;
-  }
-
-  if (command.arg1.empty()) {
-    log_warning("control: cmd requires command key");
-    return;
-  }
-
-  const std::uint16_t command_id = find_command_id_by_key(*node, command.arg1);
-  if (command_id == 0U) {
-    log_warning("control: unknown command key: " + command.arg1);
-    return;
-  }
-
-  (void)enqueue_command(target, command_id, command.value, command.has_value);
-}
-
-void handle_focus_command(const control::command_t& command) {
-  if (command.arg0.empty() || iequals_ascii(command.arg0, "clear") || iequals_ascii(command.arg0, "none")) {
-    operating_mode::clear_focus_target();
-    log_info("control: cs focus cleared");
-    return;
-  }
-
-  control::target_t target = control::target_t::any;
-  if (!control::try_parse_target(command.arg0, target)) {
-    log_warning("control: unknown focus target: " + command.arg0);
-    return;
-  }
-
-  if (!operating_mode::set_focus_target(target)) {
-    log_warning("control: unsupported focus target: " + command.arg0);
-    return;
-  }
-
-  log_info("control: cs focus set to " + command.arg0);
-}
-
-void handle_nominal_command() {
-  operating_mode::clear_focus_target();
-  log_info("control: cs nominal mode");
-}
-
-void drain_control_queue() {
-  control::command_t command{};
-  while (control::pop_command(control::target_t::cs, command)) {
-    if ((command.verb == "exchange") || (command.verb == "ex")) {
-      handle_exchange_command(command);
-      continue;
-    }
-
-    if (command.verb == "enable") {
-      handle_enable_command(command);
-      continue;
-    }
-
-    if (command.verb == "disable") {
-      handle_disable_command(command);
-      continue;
-    }
-
-    if (command.verb == "focus") {
-      handle_focus_command(command);
-      continue;
-    }
-
-    if (command.verb == "nominal") {
-      handle_nominal_command();
-      continue;
-    }
-
-    if (command.verb == "cmd") {
-      handle_cmd_command(command);
-      continue;
-    }
-
-    if (command.verb == "help") {
-      log_info("control: supported cs commands: exchange <target>, enable <target>, disable <target>, focus <target|clear>, nominal, cmd <target> <KEY> [value=N]");
-      continue;
-    }
-
-    log_warning("control: unsupported cs command: " + command.raw);
-  }
 }
 
 }  // namespace
@@ -593,8 +508,10 @@ void reset() {
   G_TASKS = {};
   G_NORMAL_QUEUE.clear();
   G_PRIORITY_QUEUE.clear();
+  G_COMPLETIONS.clear();
   G_ACTIVE_TASK_SLOT = k_invalid_slot;
   G_NEXT_TASK_ID = 1U;
+  G_PRIORITY_BURST = 0U;
 }
 
 task_id_t enqueue_exchange(const control::target_t target,
@@ -694,11 +611,14 @@ std::size_t cancel_target(const control::target_t target) {
   return remove_tasks_for_node(*node);
 }
 
-void local_algorithm() {
-  if (!G_READY) {
-    return;
+bool try_pop_completion(completion_t& out) {
+  if (G_COMPLETIONS.empty()) {
+    return false;
   }
-  drain_control_queue();
+
+  out = G_COMPLETIONS.front();
+  G_COMPLETIONS.pop_front();
+  return true;
 }
 
 void exchange_control(isysalgo::bus_state_t& bus) {
@@ -706,7 +626,26 @@ void exchange_control(isysalgo::bus_state_t& bus) {
     return;
   }
 
-  finalize_active_task(bus);
+  const auto completion = finalize_active_task(bus);
+  if (completion.valid) {
+    G_COMPLETIONS.push_back(completion_t{
+        .valid = true,
+        .target = completion.target,
+        .kind = to_public_completion_kind(completion.kind),
+        .periodic = completion.periodic,
+        .have_result = completion.have_result,
+        .result = to_public_completion_result(completion.result),
+    });
+
+    std::ostringstream oss;
+    oss << "cs scheduler: finish task id=" << completion.id << " target=" << completion.target_name
+        << " kind=" << task_kind_to_string(completion.kind)
+        << " result=" << isysalgo::IBUS_RESULT_TO_STRING(completion.result);
+    if (!completion.have_result) {
+      oss << " pending_result=0";
+    }
+    log_info(oss.str());
+  }
   start_next_task(bus);
 }
 

@@ -7,7 +7,7 @@
 #define ARP_TICK_HZ                     100u
 
 // Ускорение симуляции в процентах (100 = реальное время, 200 = x2, 50 = x0.5).
-#define ARP_SIM_SPEED_PERCENT           10u
+#define ARP_SIM_SPEED_PERCENT           100u
 
 // Температура окружающей среды.
 #define ARP_ENV_AMBIENT_TEMP_C          25

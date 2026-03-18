@@ -33,6 +33,13 @@ enum class tx_flag_t : std::uint8_t {
   tx_eof,
 };
 
+enum class exchange_result_t : std::uint8_t {
+  none = 0,
+  success,
+  timeout,
+  invalid_eof,
+};
+
 struct bus_state_t {
   bus_role_t role{bus_role_t::device};
   std::uint8_t self_addr{0};
@@ -62,6 +69,8 @@ struct bus_state_t {
   std::uint16_t exchange_sub_clock{0};
   std::uint16_t exchange_wait_clock{0};
   bool exchange_busy{false};
+  bool result_ready{false};
+  exchange_result_t last_result{exchange_result_t::none};
   std::uint32_t writer_tick{0};
 };
 
@@ -109,6 +118,9 @@ void IBUS_GEN_STD_HEADER(bus_state_t& state);
 void IBUS_RESET_FRAME_LAYOUT(bus_state_t& state);
 bool IBUS_SET_COM_FRAME(bus_state_t& state, std::size_t offset_blocks, std::size_t block_count);
 bool IBUS_SET_PAR_FRAME(bus_state_t& state, std::size_t offset_blocks, std::size_t block_count);
+void IBUS_CLEAR_RESULT(bus_state_t& state);
+bool IBUS_TAKE_RESULT(bus_state_t& state, exchange_result_t& out_result);
+const char* IBUS_RESULT_TO_STRING(exchange_result_t result);
 void ISYS_SYNC_MSGCOM_TO_BUF(bus_state_t& state);
 void ISYS_SYNC_MSGPAR_TO_BUF(bus_state_t& state);
 

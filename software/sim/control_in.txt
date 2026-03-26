@@ -1,0 +1,3 @@
+cs stagecmd pss CPSSPWRON
+cs sendcmd pss
+cs cmd pss CPSSCLOCK value=19

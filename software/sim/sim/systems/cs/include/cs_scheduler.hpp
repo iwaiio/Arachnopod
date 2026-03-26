@@ -41,11 +41,11 @@ struct completion_t {
 };
 
 struct context_t {
-  const ipar::context_t* ipar_ctx{nullptr};
-  std::uint16_t* msg_com{nullptr};
-  std::size_t msg_com_blocks{0};
-  std::uint16_t* msg_com_buf{nullptr};
-  std::size_t msg_com_buf_blocks{0};
+  const ipar::context_t* imsg_ctx{nullptr};
+  std::uint16_t* msg_cmd{nullptr};
+  std::size_t msg_cmd_blocks{0};
+  std::uint16_t* msg_cmd_buf{nullptr};
+  std::size_t msg_cmd_buf_blocks{0};
 };
 
 void init(const context_t& ctx);
@@ -58,7 +58,7 @@ task_id_t ensure_periodic_exchange(control::target_t target,
                                    queue_class_t queue = queue_class_t::normal);
 task_id_t enqueue_command(control::target_t target,
                           std::uint16_t command_id,
-                          std::int32_t command_value = 1,
+                          float command_value = 1.0F,
                           bool has_value = false,
                           queue_class_t queue = queue_class_t::normal);
 bool cancel_periodic_exchange(control::target_t target);

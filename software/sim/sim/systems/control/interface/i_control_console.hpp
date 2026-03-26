@@ -22,7 +22,7 @@ struct command_t {
   std::string verb;
   std::string arg0;
   std::string arg1;
-  std::int32_t value{0};
+  float value{0.0F};
   bool has_value{false};
   std::string raw;
 };

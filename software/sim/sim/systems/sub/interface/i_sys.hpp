@@ -26,9 +26,9 @@ void ISYSCLEAR(std::uint16_t* buf, std::size_t count);
 
 ipar::context_t ISYSCTX(ipar::role_t role,
                         std::uint8_t system_id,
-                        std::uint16_t* msg_par,
-                        std::size_t msg_par_blocks,
-                        std::uint16_t* msg_com,
-                        std::size_t msg_com_blocks);
+                        std::uint16_t* msg_prm,
+                        std::size_t msg_prm_blocks,
+                        std::uint16_t* msg_cmd,
+                        std::size_t msg_cmd_blocks);
 
 }  // namespace isys

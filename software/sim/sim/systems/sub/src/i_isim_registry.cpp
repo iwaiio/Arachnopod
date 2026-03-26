@@ -3,10 +3,35 @@
 namespace isimreg {
 
 isim::value_kind_t ISIMKIND(const sim_base::param_entry_t& entry) {
-  if (entry.bits >= 16U) {
-    return entry.is_signed ? isim::value_kind_t::s16 : isim::value_kind_t::u16;
+  switch (entry.physical_type) {
+    case sim_base::physical_type_t::boolean:
+    case sim_base::physical_type_t::uint8:
+      return isim::value_kind_t::u8;
+    case sim_base::physical_type_t::int8:
+      return isim::value_kind_t::s8;
+    case sim_base::physical_type_t::uint16:
+      return isim::value_kind_t::u16;
+    case sim_base::physical_type_t::int16:
+      return isim::value_kind_t::s16;
+    case sim_base::physical_type_t::float32:
+    case sim_base::physical_type_t::ufloat32:
+      return isim::value_kind_t::f32;
+    default:
+      return isim::value_kind_t::u8;
   }
-  return entry.is_signed ? isim::value_kind_t::s8 : isim::value_kind_t::u8;
+}
+
+isim::value_domain_t ISIMDOMAIN(const sim_base::param_entry_t& entry) {
+  switch (entry.physical_type) {
+    case sim_base::physical_type_t::boolean:
+      return isim::value_domain_t::binary;
+    case sim_base::physical_type_t::uint8:
+    case sim_base::physical_type_t::uint16:
+    case sim_base::physical_type_t::ufloat32:
+      return isim::value_domain_t::non_negative;
+    default:
+      return isim::value_domain_t::plain;
+  }
 }
 
 void ISIMREG_BUILD(const sim_base::param_entry_t* params,
@@ -23,6 +48,7 @@ void ISIMREG_BUILD(const sim_base::param_entry_t* params,
     bindings[i] = isim::binding_t{
         .id = params[i].id,
         .kind = ISIMKIND(params[i]),
+        .domain = ISIMDOMAIN(params[i]),
         .ptr = params[i].ptr,
     };
   }

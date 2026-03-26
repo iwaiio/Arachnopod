@@ -1,9 +1,3 @@
-cs exchange pss
-cs exchange pss
-cs exchange pss
-cs exchange pss
-cs cmd pss CPSSPWROFF value=1
-cs exchange pss
-cs exchange pss
-cs cmd pss CPSSPWRON
-cs enable pss
+cs stagecmd pss CPSSPWRON
+cs sendcmd pss
+cs cmd pss CPSSCLOCK value=13

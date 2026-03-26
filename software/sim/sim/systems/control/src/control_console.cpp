@@ -1,445 +1,51 @@
 #include "i_control_console.hpp"
 
-#include <array>
-#include <atomic>
-#include <cctype>
-#include <chrono>
-#include <cstdlib>
-#include <deque>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <mutex>
-#include <sstream>
-#include <string>
-#include <thread>
-#include <vector>
-
-#include "common.hpp"
+#include "control_internal.hpp"
 
 namespace control {
-namespace {
-
-std::atomic<bool> G_RUNNING{false};
-std::atomic<bool> G_STOP{false};
-std::atomic<unsigned> G_ACTIVE_WORKERS{0U};
-std::mutex G_MUTEX{};
-std::array<std::deque<command_t>, static_cast<std::size_t>(target_t::count)> G_QUEUES{};
-
-std::thread G_THREAD{};
-std::thread G_FILE_THREAD{};
-config_t G_CFG{};
-
-void worker_started() {
-  G_ACTIVE_WORKERS.fetch_add(1U, std::memory_order_relaxed);
-  G_RUNNING.store(true, std::memory_order_relaxed);
-}
-
-void worker_stopped() {
-  const unsigned left = G_ACTIVE_WORKERS.fetch_sub(1U, std::memory_order_relaxed) - 1U;
-  if (left == 0U) {
-    G_RUNNING.store(false, std::memory_order_relaxed);
-  }
-}
-
-void ensure_logger() {
-  if (common::log::is_initialized()) {
-    return;
-  }
-  const common::log::init_config_t cfg{
-      .min_level = common::log::level_t::info,
-      .truncate_on_init = true,
-  };
-  (void)common::log::init_for_module("control", cfg);
-}
-
-std::string to_lower_copy(std::string s) {
-  for (char& ch : s) {
-    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-  }
-  return s;
-}
-
-std::vector<std::string> split_ws(const std::string& line) {
-  std::istringstream iss(line);
-  std::vector<std::string> out;
-  std::string token;
-  while (iss >> token) {
-    out.push_back(token);
-  }
-  return out;
-}
-
-std::size_t target_index(const target_t target) {
-  return static_cast<std::size_t>(target);
-}
-
-bool parse_int(const std::string& token, std::int32_t& out) {
-  if (token.empty()) {
-    return false;
-  }
-  char* end = nullptr;
-  const long value = std::strtol(token.c_str(), &end, 0);
-  if (end == token.c_str() || (end != nullptr && *end != '\0')) {
-    return false;
-  }
-  out = static_cast<std::int32_t>(value);
-  return true;
-}
-
-target_t parse_target(const std::string& token) {
-  const std::string t = to_lower_copy(token);
-  if (t == "cs") {
-    return target_t::cs;
-  }
-  if (t == "pss") {
-    return target_t::pss;
-  }
-  if (t == "tcs") {
-    return target_t::tcs;
-  }
-  if (t == "tms") {
-    return target_t::tms;
-  }
-  if (t == "mns") {
-    return target_t::mns;
-  }
-  if (t == "ls") {
-    return target_t::ls;
-  }
-  if (t == "any") {
-    return target_t::any;
-  }
-  return target_t::any;
-}
-
-void enqueue_command(command_t&& cmd) {
-  if (common::log::is_initialized()) {
-    std::ostringstream oss;
-    oss << "control: queued target=" << target_to_string(cmd.target) << " verb=" << cmd.verb;
-    if (!cmd.arg0.empty()) {
-      oss << " arg0=" << cmd.arg0;
-    }
-    if (!cmd.arg1.empty()) {
-      oss << " arg1=" << cmd.arg1;
-    }
-    if (cmd.has_value) {
-      oss << " value=" << cmd.value;
-    }
-    common::log::info(oss.str());
-  }
-
-  std::lock_guard<std::mutex> lock(G_MUTEX);
-  G_QUEUES[target_index(cmd.target)].push_back(std::move(cmd));
-}
-
-bool parse_line(const std::string& line, command_t& out) {
-  const auto tokens = split_ws(line);
-  if (tokens.empty()) {
-    return false;
-  }
-
-  std::size_t idx = 0;
-  target_t target = target_t::cs;
-  target_t first_token_target = target_t::any;
-  if (try_parse_target(tokens[0], first_token_target)) {
-    target = first_token_target;
-    idx = 1;
-  }
-
-  if (idx >= tokens.size()) {
-    return false;
-  }
-
-  const std::string verb = to_lower_copy(tokens[idx]);
-  command_t cmd{};
-  cmd.target = target;
-  cmd.verb = verb;
-  cmd.raw = line;
-
-  if (verb == "help") {
-    out = std::move(cmd);
-    return true;
-  }
-
-  if (verb == "quit" || verb == "exit") {
-    out = std::move(cmd);
-    return true;
-  }
-
-  if (verb == "exchange" || verb == "ex") {
-    if ((idx + 1) < tokens.size()) {
-      cmd.arg0 = tokens[idx + 1];
-    }
-    out = std::move(cmd);
-    return true;
-  }
-
-  if (verb == "enable" || verb == "disable") {
-    if ((idx + 1) < tokens.size()) {
-      cmd.arg0 = tokens[idx + 1];
-    }
-    out = std::move(cmd);
-    return true;
-  }
-
-  if (verb == "focus") {
-    if ((idx + 1) < tokens.size()) {
-      cmd.arg0 = tokens[idx + 1];
-    }
-    out = std::move(cmd);
-    return true;
-  }
-
-  if (verb == "nominal") {
-    out = std::move(cmd);
-    return true;
-  }
-
-  if (verb == "status") {
-    if ((idx + 1) < tokens.size()) {
-      cmd.arg0 = tokens[idx + 1];
-    }
-    out = std::move(cmd);
-    return true;
-  }
-
-  if (verb == "cmd") {
-    if ((idx + 1) < tokens.size()) {
-      cmd.arg0 = tokens[idx + 1];
-    }
-    if ((idx + 2) < tokens.size()) {
-      cmd.arg1 = tokens[idx + 2];
-      if (cmd.arg1.rfind("id=", 0) == 0) {
-        cmd.arg1 = cmd.arg1.substr(3);
-      }
-    }
-
-    for (std::size_t i = idx + 3; i < tokens.size(); ++i) {
-      const std::string& token = tokens[i];
-      const auto eq_pos = token.find('=');
-      if (eq_pos != std::string::npos) {
-        const std::string key = to_lower_copy(token.substr(0, eq_pos));
-        const std::string value = token.substr(eq_pos + 1);
-        if (key == "value") {
-          std::int32_t parsed = 0;
-          if (parse_int(value, parsed)) {
-            cmd.value = parsed;
-            cmd.has_value = true;
-          }
-        } else if (key == "id") {
-          cmd.arg1 = value;
-        }
-      } else {
-        std::int32_t parsed = 0;
-        if (parse_int(token, parsed)) {
-          cmd.value = parsed;
-          cmd.has_value = true;
-        }
-      }
-    }
-
-    out = std::move(cmd);
-    return true;
-  }
-
-  return false;
-}
-
-void console_loop() {
-  worker_started();
-  ensure_logger();
-
-  common::log::info("control console started");
-
-  std::string line;
-  while (!G_STOP.load(std::memory_order_relaxed)) {
-    if (!std::getline(std::cin, line)) {
-      break;
-    }
-
-    if (line.empty()) {
-      continue;
-    }
-
-    command_t cmd{};
-    if (!parse_line(line, cmd)) {
-      common::log::warning("control: ignored invalid command: " + line);
-      continue;
-    }
-
-    if (cmd.verb == "quit" || cmd.verb == "exit") {
-      G_STOP.store(true, std::memory_order_relaxed);
-      break;
-    }
-
-    enqueue_command(std::move(cmd));
-
-    if (G_CFG.echo) {
-      common::log::info("control: " + line);
-    }
-  }
-
-  common::log::info("control console stopped");
-  worker_stopped();
-}
-
-std::filesystem::path resolve_log_dir() {
-  const auto cwd = std::filesystem::current_path();
-
-  for (auto p = cwd; !p.empty(); p = p.parent_path()) {
-    const auto candidate = p / "software" / "sim";
-    std::error_code ec{};
-    if (std::filesystem::exists(candidate, ec) && std::filesystem::is_directory(candidate, ec)) {
-      return candidate / "log";
-    }
-    if (p == p.parent_path()) {
-      break;
-    }
-  }
-
-  const std::filesystem::path root_variant = std::filesystem::path("software") / "sim";
-  std::error_code ec{};
-  if (std::filesystem::exists(root_variant, ec) && std::filesystem::is_directory(root_variant, ec)) {
-    return root_variant / "log";
-  }
-
-  const std::filesystem::path local_variant = std::filesystem::path("sim");
-  if (std::filesystem::exists(local_variant, ec) && std::filesystem::is_directory(local_variant, ec)) {
-    return local_variant / "log";
-  }
-
-  return local_variant / "log";
-}
-
-std::filesystem::path resolve_control_file() {
-  const char* env = std::getenv("ARP_CONTROL_FILE");
-  if (env != nullptr && *env != '\0') {
-    const std::string raw(env);
-    if (raw == "0") {
-      return {};
-    }
-    return std::filesystem::path(raw);
-  }
-
-  return resolve_log_dir() / "control_in.txt";
-}
-
-void file_loop(const std::filesystem::path path) {
-  worker_started();
-  ensure_logger();
-
-  if (path.empty()) {
-    return;
-  }
-
-  common::log::info("control file listener started: " + path.string());
-
-  std::uintmax_t offset = 0;
-  while (!G_STOP.load(std::memory_order_relaxed)) {
-    std::error_code ec{};
-    if (!std::filesystem::exists(path, ec)) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      continue;
-    }
-
-    const std::uintmax_t size = std::filesystem::file_size(path, ec);
-    if (ec) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      continue;
-    }
-
-    if (size < offset) {
-      offset = 0;
-    }
-
-    if (size > offset) {
-      std::ifstream stream(path, std::ios::in);
-      if (stream.is_open()) {
-        stream.seekg(static_cast<std::streamoff>(offset));
-        std::string line;
-        while (std::getline(stream, line)) {
-          if (line.empty()) {
-            continue;
-          }
-
-          command_t cmd{};
-          if (!parse_line(line, cmd)) {
-            common::log::warning("control: ignored invalid command (file): " + line);
-            continue;
-          }
-
-          if (cmd.verb == "quit" || cmd.verb == "exit") {
-            common::log::warning("control: quit ignored for file input");
-            continue;
-          }
-
-          enqueue_command(std::move(cmd));
-          if (G_CFG.echo) {
-            common::log::info("control(file): " + line);
-          }
-        }
-
-        const auto pos = stream.tellg();
-        if (pos != std::streampos(-1)) {
-          offset = static_cast<std::uintmax_t>(pos);
-        } else {
-          offset = size;
-        }
-      }
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  }
-
-  common::log::info("control file listener stopped");
-  worker_stopped();
-}
-
-}  // namespace
 
 void start(const config_t cfg) {
   if (!cfg.enabled || (!cfg.console_enabled && !cfg.file_enabled)) {
     return;
   }
-  if (G_RUNNING.exchange(true, std::memory_order_relaxed)) {
-    G_RUNNING.store(true, std::memory_order_relaxed);
+  if (internal::G_RUNNING.exchange(true, std::memory_order_relaxed)) {
+    internal::G_RUNNING.store(true, std::memory_order_relaxed);
     return;
   }
 
-  G_CFG = cfg;
-  G_STOP.store(false, std::memory_order_relaxed);
-  G_ACTIVE_WORKERS.store(0U, std::memory_order_relaxed);
-  G_RUNNING.store(false, std::memory_order_relaxed);
+  internal::G_CFG = cfg;
+  internal::G_STOP.store(false, std::memory_order_relaxed);
+  internal::G_ACTIVE_WORKERS.store(0U, std::memory_order_relaxed);
+  internal::G_RUNNING.store(false, std::memory_order_relaxed);
 
-  if (G_CFG.console_enabled) {
-    G_THREAD = std::thread(console_loop);
-    G_THREAD.detach();
+  if (internal::G_CFG.console_enabled) {
+    internal::G_THREAD = std::thread(internal::console_loop);
+    internal::G_THREAD.detach();
   }
 
-  const auto control_file = G_CFG.file_enabled ? resolve_control_file() : std::filesystem::path{};
+  const auto control_file = internal::G_CFG.file_enabled ? internal::resolve_control_file() : std::filesystem::path{};
   if (!control_file.empty()) {
-    G_FILE_THREAD = std::thread(file_loop, control_file);
-    G_FILE_THREAD.detach();
+    internal::G_FILE_THREAD = std::thread(internal::file_loop, control_file);
+    internal::G_FILE_THREAD.detach();
   }
 
-  if (G_ACTIVE_WORKERS.load(std::memory_order_relaxed) == 0U) {
-    G_RUNNING.store(false, std::memory_order_relaxed);
+  if (internal::G_ACTIVE_WORKERS.load(std::memory_order_relaxed) == 0U) {
+    internal::G_RUNNING.store(false, std::memory_order_relaxed);
   }
 }
 
 void stop() {
-  G_STOP.store(true, std::memory_order_relaxed);
+  internal::G_STOP.store(true, std::memory_order_relaxed);
 }
 
 bool is_running() {
-  return G_RUNNING.load(std::memory_order_relaxed);
+  return internal::G_RUNNING.load(std::memory_order_relaxed);
 }
 
 bool pop_command(const target_t target, command_t& out) {
-  std::lock_guard<std::mutex> lock(G_MUTEX);
+  std::lock_guard<std::mutex> lock(internal::G_MUTEX);
 
-  auto& queue = G_QUEUES[target_index(target)];
+  auto& queue = internal::G_QUEUES[internal::target_index(target)];
   if (!queue.empty()) {
     out = std::move(queue.front());
     queue.pop_front();
@@ -447,7 +53,7 @@ bool pop_command(const target_t target, command_t& out) {
   }
 
   if (target != target_t::any) {
-    auto& any_queue = G_QUEUES[target_index(target_t::any)];
+    auto& any_queue = internal::G_QUEUES[internal::target_index(target_t::any)];
     if (!any_queue.empty()) {
       out = std::move(any_queue.front());
       any_queue.pop_front();
@@ -459,20 +65,20 @@ bool pop_command(const target_t target, command_t& out) {
 }
 
 void clear(const target_t target) {
-  std::lock_guard<std::mutex> lock(G_MUTEX);
+  std::lock_guard<std::mutex> lock(internal::G_MUTEX);
   if (target == target_t::any) {
-    for (auto& queue : G_QUEUES) {
+    for (auto& queue : internal::G_QUEUES) {
       queue.clear();
     }
     return;
   }
 
-  G_QUEUES[target_index(target)].clear();
+  internal::G_QUEUES[internal::target_index(target)].clear();
 }
 
 bool try_parse_target(const std::string_view token, target_t& out) {
-  const target_t parsed = parse_target(std::string(token));
-  if ((parsed == target_t::any) && (to_lower_copy(std::string(token)) != "any")) {
+  const target_t parsed = internal::parse_target(std::string(token));
+  if ((parsed == target_t::any) && (internal::to_lower_copy(std::string(token)) != "any")) {
     return false;
   }
 

@@ -1,7 +1,8 @@
 import os
+import re
 import tkinter as tk
-from tkinter import ttk
 from pathlib import Path
+from tkinter import ttk
 
 REFRESH_MS = 500
 MAX_LINES = 2000
@@ -35,25 +36,28 @@ EXTRA_LOGS = [
     ("CONTROL", "control"),
 ]
 
+CS_TARGETS = ["pss", "tcs", "tms", "mns", "ls"]
+
+
+def resolve_repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for base in [here] + list(here.parents):
+        if (base / "software" / "sim").is_dir():
+            return base
+
+    cwd = Path.cwd().resolve()
+    for base in [cwd] + list(cwd.parents):
+        if (base / "software" / "sim").is_dir():
+            return base
+
+    return Path.cwd().resolve()
+
 
 def resolve_log_dir() -> Path:
     env = os.getenv("ARP_LOG_DIR")
     if env:
         return Path(env)
-
-    here = Path(__file__).resolve()
-    for base in [here] + list(here.parents):
-        candidate = base / "software" / "sim" / "log"
-        if candidate.is_dir():
-            return candidate
-
-    cwd = Path.cwd().resolve()
-    for base in [cwd] + list(cwd.parents):
-        candidate = base / "software" / "sim" / "log"
-        if candidate.is_dir():
-            return candidate
-
-    return Path("software") / "sim" / "log"
+    return resolve_repo_root() / "software" / "sim" / "log"
 
 
 def resolve_control_file(log_dir: Path) -> Path:
@@ -61,6 +65,48 @@ def resolve_control_file(log_dir: Path) -> Path:
     if env and env != "0":
         return Path(env)
     return log_dir / "control_in.txt"
+
+
+def resolve_command_tab() -> Path:
+    return resolve_repo_root() / "software" / "sim" / "sim" / "systems" / "base" / "command_tab.hpp"
+
+
+def load_command_catalog(path: Path) -> dict[str, list[str]]:
+    catalog = {target: [] for target in CS_TARGETS}
+    if not path.exists():
+        return catalog
+
+    pattern = re.compile(r'\{SYS_([A-Z]+),.*?"([A-Z0-9_]+)",\s*ALG_')
+    seen: dict[str, set[str]] = {target: set() for target in CS_TARGETS}
+
+    with path.open("r", encoding="utf-8", errors="replace") as file:
+        for line in file:
+            match = pattern.search(line)
+            if not match:
+                continue
+
+            target = match.group(1).lower()
+            key = match.group(2)
+            if target not in catalog:
+                continue
+            if key in seen[target]:
+                continue
+
+            catalog[target].append(key)
+            seen[target].add(key)
+
+    return catalog
+
+
+class CommandSender:
+    def __init__(self, control_file: Path) -> None:
+        self.control_file = control_file
+
+    def send(self, command: str) -> str:
+        self.control_file.parent.mkdir(parents=True, exist_ok=True)
+        with self.control_file.open("a", encoding="utf-8") as file:
+            file.write(command + "\n")
+        return command
 
 
 class LogTail:
@@ -83,10 +129,10 @@ class LogTail:
         if size > TAIL_MAX_BYTES:
             start = size - TAIL_MAX_BYTES
 
-        with self.path.open("r", encoding="utf-8", errors="replace") as f:
+        with self.path.open("r", encoding="utf-8", errors="replace") as file:
             if start > 0:
-                f.seek(start)
-            data = f.read()
+                file.seek(start)
+            data = file.read()
 
         self.offset = size
         return data
@@ -108,10 +154,10 @@ class LogTail:
         if size == self.offset:
             return ""
 
-        with self.path.open("r", encoding="utf-8", errors="replace") as f:
-            f.seek(self.offset)
-            data = f.read()
-            self.offset = f.tell()
+        with self.path.open("r", encoding="utf-8", errors="replace") as file:
+            file.seek(self.offset)
+            data = file.read()
+            self.offset = file.tell()
         return data
 
 
@@ -157,107 +203,193 @@ class LogTab:
         self.append(self.tail.read_new())
 
 
-class ControlTab:
-    def __init__(self, parent: ttk.Notebook, control_file: Path) -> None:
+class RawControlTab:
+    def __init__(self, parent: ttk.Notebook, sender: CommandSender) -> None:
         self.frame = ttk.Frame(parent)
-        parent.add(self.frame, text="CONTROL")
+        parent.add(self.frame, text="RAW CONTROL")
 
-        self.control_file = control_file
-
-        info = ttk.Label(self.frame, text=f"Control file: {control_file}")
-        info.pack(side=tk.TOP, anchor="w", padx=6, pady=4)
-
-        form = ttk.Frame(self.frame)
-        form.pack(side=tk.TOP, fill=tk.X, padx=6, pady=6)
-
-        self.target_var = tk.StringVar(value="cs")
-        self.action_var = tk.StringVar(value="exchange")
-        self.arg0_var = tk.StringVar(value="pss")
-        self.arg1_var = tk.StringVar()
-        self.value_var = tk.StringVar()
+        self.sender = sender
         self.raw_var = tk.StringVar()
+        self.status_var = tk.StringVar()
 
-        ttk.Label(form, text="Target").grid(row=0, column=0, sticky="w")
-        ttk.Combobox(form, textvariable=self.target_var, values=[
-            "cs", "pss", "tcs", "tms", "mns", "ls", "any"
-        ], width=10).grid(row=0, column=1, sticky="w", padx=6)
+        info = ttk.Label(
+            self.frame,
+            text="Low-level access to control_in.txt. Use this when the dedicated CS UV panel is not enough.",
+        )
+        info.pack(side=tk.TOP, anchor="w", padx=8, pady=8)
 
-        ttk.Label(form, text="Action").grid(row=0, column=2, sticky="w")
-        ttk.Combobox(form, textvariable=self.action_var, values=[
-            "exchange", "cmd", "enable", "disable", "help"
-        ], width=12).grid(row=0, column=3, sticky="w", padx=6)
+        row = ttk.Frame(self.frame)
+        row.pack(side=tk.TOP, fill=tk.X, padx=8, pady=8)
 
-        ttk.Label(form, text="Arg0").grid(row=1, column=0, sticky="w")
-        ttk.Entry(form, textvariable=self.arg0_var, width=12).grid(row=1, column=1, sticky="w", padx=6)
+        ttk.Entry(row, textvariable=self.raw_var, width=100).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(row, text="Send", command=self.send).pack(side=tk.LEFT, padx=8)
 
-        ttk.Label(form, text="Arg1").grid(row=1, column=2, sticky="w")
-        ttk.Entry(form, textvariable=self.arg1_var, width=20).grid(row=1, column=3, sticky="w", padx=6)
-
-        ttk.Label(form, text="Value").grid(row=2, column=0, sticky="w")
-        ttk.Entry(form, textvariable=self.value_var, width=12).grid(row=2, column=1, sticky="w", padx=6)
-
-        ttk.Label(form, text="Raw").grid(row=2, column=2, sticky="w")
-        ttk.Entry(form, textvariable=self.raw_var, width=40).grid(row=2, column=3, sticky="w", padx=6)
-
-        btns = ttk.Frame(self.frame)
-        btns.pack(side=tk.TOP, fill=tk.X, padx=6, pady=6)
-
-        send_btn = ttk.Button(btns, text="Send", command=self.send)
-        send_btn.pack(side=tk.LEFT)
-
-        self.status = ttk.Label(btns, text="")
-        self.status.pack(side=tk.LEFT, padx=8)
-
-    def build_command(self) -> str:
-        raw = self.raw_var.get().strip()
-        if raw:
-            return raw
-
-        parts = []
-        target = self.target_var.get().strip()
-        if target and target != "any":
-            parts.append(target)
-
-        action = self.action_var.get().strip()
-        if not action:
-            return ""
-        parts.append(action)
-
-        arg0 = self.arg0_var.get().strip()
-        arg1 = self.arg1_var.get().strip()
-        value = self.value_var.get().strip()
-
-        if action in ("exchange", "ex"):
-            if arg0:
-                parts.append(arg0)
-        elif action == "cmd":
-            if arg0:
-                parts.append(arg0)
-            if arg1:
-                parts.append(arg1)
-            if value:
-                parts.append(f"value={value}")
-        elif action in ("enable", "disable"):
-            if arg0:
-                parts.append(arg0)
-        elif action == "help":
-            pass
-
-        return " ".join(parts)
+        ttk.Label(self.frame, textvariable=self.status_var).pack(side=tk.TOP, anchor="w", padx=8)
 
     def send(self) -> None:
-        command = self.build_command()
+        command = self.raw_var.get().strip()
         if not command:
-            self.status.configure(text="empty command")
+            self.status_var.set("empty command")
             return
 
         try:
-            self.control_file.parent.mkdir(parents=True, exist_ok=True)
-            with self.control_file.open("a", encoding="utf-8") as f:
-                f.write(command + "\n")
-            self.status.configure(text=f"sent: {command}")
+            sent = self.sender.send(command)
         except OSError as exc:
-            self.status.configure(text=f"error: {exc}")
+            self.status_var.set(f"error: {exc}")
+            return
+
+        self.status_var.set(f"sent: {sent}")
+
+
+class CommandActionFrame:
+    def __init__(
+        self,
+        parent: ttk.LabelFrame,
+        sender: CommandSender,
+        catalog: dict[str, list[str]],
+        button_text: str,
+        verb: str,
+        status_var: tk.StringVar,
+    ) -> None:
+        self.sender = sender
+        self.catalog = catalog
+        self.verb = verb
+        self.status_var = status_var
+
+        self.target_var = tk.StringVar(value=CS_TARGETS[0])
+        self.command_var = tk.StringVar()
+        self.value_var = tk.StringVar()
+
+        ttk.Label(parent, text="Target").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        self.target_combo = ttk.Combobox(parent, textvariable=self.target_var, values=CS_TARGETS, width=10, state="readonly")
+        self.target_combo.grid(row=0, column=1, sticky="w", padx=6, pady=4)
+        self.target_combo.bind("<<ComboboxSelected>>", self._on_target_changed)
+
+        ttk.Label(parent, text="Command").grid(row=0, column=2, sticky="w", padx=6, pady=4)
+        self.command_combo = ttk.Combobox(parent, textvariable=self.command_var, width=28, state="readonly")
+        self.command_combo.grid(row=0, column=3, sticky="w", padx=6, pady=4)
+
+        ttk.Label(parent, text="Value").grid(row=0, column=4, sticky="w", padx=6, pady=4)
+        ttk.Entry(parent, textvariable=self.value_var, width=14).grid(row=0, column=5, sticky="w", padx=6, pady=4)
+
+        ttk.Button(parent, text=button_text, command=self.send).grid(row=0, column=6, sticky="w", padx=6, pady=4)
+
+        self._refresh_commands()
+
+    def _refresh_commands(self) -> None:
+        target = self.target_var.get().strip().lower()
+        commands = self.catalog.get(target, [])
+        self.command_combo.configure(values=commands)
+        if commands:
+            if self.command_var.get() not in commands:
+                self.command_var.set(commands[0])
+        else:
+            self.command_var.set("")
+
+    def _on_target_changed(self, _event: object) -> None:
+        self._refresh_commands()
+
+    def send(self) -> None:
+        target = self.target_var.get().strip().lower()
+        command = self.command_var.get().strip()
+        value = self.value_var.get().strip()
+
+        if not target:
+            self.status_var.set("target is required")
+            return
+        if not command:
+            self.status_var.set("command key is required")
+            return
+
+        parts = ["cs", self.verb, target, command]
+        if value:
+            parts.append(f"value={value}")
+
+        line = " ".join(parts)
+        try:
+            sent = self.sender.send(line)
+        except OSError as exc:
+            self.status_var.set(f"error: {exc}")
+            return
+
+        self.status_var.set(f"sent: {sent}")
+
+
+class SimpleTargetActionFrame:
+    def __init__(
+        self,
+        parent: ttk.LabelFrame,
+        sender: CommandSender,
+        button_text: str,
+        verb: str,
+        status_var: tk.StringVar,
+    ) -> None:
+        self.sender = sender
+        self.verb = verb
+        self.status_var = status_var
+        self.target_var = tk.StringVar(value=CS_TARGETS[0])
+
+        ttk.Label(parent, text="Target").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Combobox(parent, textvariable=self.target_var, values=CS_TARGETS, width=10, state="readonly").grid(
+            row=0, column=1, sticky="w", padx=6, pady=4
+        )
+        ttk.Button(parent, text=button_text, command=self.send).grid(row=0, column=2, sticky="w", padx=6, pady=4)
+
+    def send(self) -> None:
+        target = self.target_var.get().strip().lower()
+        if not target:
+            self.status_var.set("target is required")
+            return
+
+        line = f"cs {self.verb} {target}"
+        try:
+            sent = self.sender.send(line)
+        except OSError as exc:
+            self.status_var.set(f"error: {exc}")
+            return
+
+        self.status_var.set(f"sent: {sent}")
+
+
+class CsUvTab:
+    def __init__(self, parent: ttk.Notebook, sender: CommandSender, catalog: dict[str, list[str]], control_file: Path) -> None:
+        self.frame = ttk.Frame(parent)
+        parent.add(self.frame, text="CS UV")
+
+        self.sender = sender
+        self.catalog = catalog
+        self.status_var = tk.StringVar(value="ready")
+
+        info = ttk.Label(
+            self.frame,
+            text=(
+                "CS UV panel writes commands to the control module.\n"
+                "Actions map to: exchange, cmd, stagecmd, sendcmd."
+            ),
+            justify="left",
+        )
+        info.pack(side=tk.TOP, anchor="w", padx=8, pady=8)
+
+        file_label = ttk.Label(self.frame, text=f"Control file: {control_file}")
+        file_label.pack(side=tk.TOP, anchor="w", padx=8)
+
+        request_box = ttk.LabelFrame(self.frame, text="Request Data From System")
+        request_box.pack(side=tk.TOP, fill=tk.X, padx=8, pady=8)
+        SimpleTargetActionFrame(request_box, sender, "Request", "exchange", self.status_var)
+
+        immediate_box = ttk.LabelFrame(self.frame, text="Send One Command Immediately")
+        immediate_box.pack(side=tk.TOP, fill=tk.X, padx=8, pady=8)
+        CommandActionFrame(immediate_box, sender, catalog, "Send Command", "cmd", self.status_var)
+
+        stage_box = ttk.LabelFrame(self.frame, text="Add Command To CS MSG_CMD")
+        stage_box.pack(side=tk.TOP, fill=tk.X, padx=8, pady=8)
+        CommandActionFrame(stage_box, sender, catalog, "Stage Command", "stagecmd", self.status_var)
+
+        send_array_box = ttk.LabelFrame(self.frame, text="Send CS MSG_CMD Window To System")
+        send_array_box.pack(side=tk.TOP, fill=tk.X, padx=8, pady=8)
+        SimpleTargetActionFrame(send_array_box, sender, "Send MSG_CMD", "sendcmd", self.status_var)
+
+        ttk.Label(self.frame, textvariable=self.status_var).pack(side=tk.TOP, anchor="w", padx=8, pady=8)
 
 
 class WatcherApp:
@@ -267,11 +399,15 @@ class WatcherApp:
 
         self.log_dir = resolve_log_dir()
         self.control_file = resolve_control_file(self.log_dir)
+        self.command_catalog = load_command_catalog(resolve_command_tab())
+        self.sender = CommandSender(self.control_file)
 
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        self.tabs = []
+        self.tabs: list[LogTab] = []
+
+        self.cs_uv_tab = CsUvTab(self.notebook, self.sender, self.command_catalog, self.control_file)
 
         for title, name in SYSTEM_LOGS:
             path = self.log_dir / f"{name}_log.log"
@@ -285,7 +421,7 @@ class WatcherApp:
             path = self.log_dir / f"{name}_log.log"
             self.tabs.append(LogTab(self.notebook, title, path))
 
-        self.control_tab = ControlTab(self.notebook, self.control_file)
+        self.raw_control_tab = RawControlTab(self.notebook, self.sender)
 
         self.root.after(REFRESH_MS, self.update_all)
 
@@ -297,8 +433,8 @@ class WatcherApp:
 
 def main() -> None:
     root = tk.Tk()
-    app = WatcherApp(root)
-    root.geometry("1200x800")
+    WatcherApp(root)
+    root.geometry("1280x860")
     root.mainloop()
 
 

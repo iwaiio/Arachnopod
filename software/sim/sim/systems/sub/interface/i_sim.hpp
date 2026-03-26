@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "../../base/local_param_list.hpp"
+
 namespace isim {
 
 enum class value_kind_t : std::uint8_t {
@@ -13,6 +15,12 @@ enum class value_kind_t : std::uint8_t {
   u32,
   s32,
   f32,
+};
+
+enum class value_domain_t : std::uint8_t {
+  plain = 0,
+  non_negative,
+  binary,
 };
 
 enum class status_t : std::uint8_t {
@@ -41,6 +49,7 @@ struct value_t {
 struct binding_t {
   std::uint16_t id{0};
   value_kind_t kind{value_kind_t::s32};
+  value_domain_t domain{value_domain_t::plain};
   void* ptr{nullptr};
 };
 
@@ -54,10 +63,13 @@ void bind_registry(const registry_t* registry);
 const registry_t* bound_registry();
 
 std::int32_t ISIMI32(const value_t& value);
-status_t ISIMPAR(std::uint16_t id, value_t* out_value);
+float ISIMF32(const value_t& value);
+status_t ISIMGET(std::uint16_t id, value_t* out_value);
 status_t ISIMSET(std::uint16_t id, const value_t* in_value);
-status_t ISIMPARI32(std::uint16_t id, std::int32_t* out_value);
+status_t ISIMGETI32(std::uint16_t id, std::int32_t* out_value);
 status_t ISIMSETI32(std::uint16_t id, std::int32_t value);
+status_t ISIMGETF32(std::uint16_t id, float* out_value);
+status_t ISIMSETF32(std::uint16_t id, float value);
 
 const char* to_string(status_t status);
 

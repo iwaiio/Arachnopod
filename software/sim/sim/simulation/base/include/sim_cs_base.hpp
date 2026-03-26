@@ -9,16 +9,32 @@
 
 namespace sim_cs_base {                                                                                                                     
 
-constexpr std::size_t k_param_count = 3U;                                                                                                   
+constexpr std::size_t k_param_count = 0U;                                                                                                   
+constexpr std::size_t k_local_param_count = 3U;                                                                                             
+constexpr std::size_t k_isim_param_count = 3U;                                                                                              
 
-extern std::uint8_t P_CSPWR;                                                                                                                
-extern std::int8_t P_CSCLOCK;                                                                                                               
-extern sim_base::float16_t P_CST;                                                                                                           
+inline std::uint8_t P_LCSPWR = 1;                                                                                                           
+inline std::int8_t P_LCSCLOCK = 0;                                                                                                          
+inline float P_LCST = 0;                                                                                                                    
 
 inline std::array<sim_base::param_entry_t, k_param_count> PARAMS = {                                                                        
-  sim_base::param_entry_t{0, "CSPWR", 8U, false, sim_base::real_type_t::uint, static_cast<void*>(&P_CSPWR)},                                
-  sim_base::param_entry_t{1, "CSCLOCK", 8U, true, sim_base::real_type_t::sint, static_cast<void*>(&P_CSCLOCK)},                             
-  sim_base::param_entry_t{2, "CST", 16U, true, sim_base::real_type_t::sfloat, static_cast<void*>(&P_CST)}                                   
 };                                                                                                                                          
+
+inline std::array<sim_base::param_entry_t, k_local_param_count> LOCAL_PARAMS = {                                                            
+  sim_base::param_entry_t{32768, "LCSPWR", 1U, sim_base::physical_type_t::boolean, static_cast<void*>(&P_LCSPWR), 1},                       
+  sim_base::param_entry_t{32769, "LCSCLOCK", 8U, sim_base::physical_type_t::int8, static_cast<void*>(&P_LCSCLOCK), 0},                      
+  sim_base::param_entry_t{32770, "LCST", 16U, sim_base::physical_type_t::float32, static_cast<void*>(&P_LCST), 0}                           
+};                                                                                                                                          
+
+inline std::array<sim_base::param_entry_t, k_isim_param_count> ISIM_PARAMS = {                                                              
+  sim_base::param_entry_t{32768, "LCSPWR", 1U, sim_base::physical_type_t::boolean, static_cast<void*>(&P_LCSPWR), 1},                       
+  sim_base::param_entry_t{32769, "LCSCLOCK", 8U, sim_base::physical_type_t::int8, static_cast<void*>(&P_LCSCLOCK), 0},                      
+  sim_base::param_entry_t{32770, "LCST", 16U, sim_base::physical_type_t::float32, static_cast<void*>(&P_LCST), 0}                           
+};                                                                                                                                          
+
+inline void init_defaults() {                                                                                                               
+  sim_base::init_params(PARAMS);                                                                                                            
+  sim_base::init_params(LOCAL_PARAMS);                                                                                                      
+}                                                                                                                                           
 
 }  // namespace sim_cs_base                                                                                                                 

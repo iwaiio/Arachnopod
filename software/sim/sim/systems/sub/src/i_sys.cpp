@@ -22,17 +22,17 @@ void ISYSCLEAR(std::uint16_t* buf, const std::size_t count) {
 
 ipar::context_t ISYSCTX(const ipar::role_t role,
                         const std::uint8_t system_id,
-                        std::uint16_t* msg_par,
-                        const std::size_t msg_par_blocks,
-                        std::uint16_t* msg_com,
-                        const std::size_t msg_com_blocks) {
+                        std::uint16_t* msg_prm,
+                        const std::size_t msg_prm_blocks,
+                        std::uint16_t* msg_cmd,
+                        const std::size_t msg_cmd_blocks) {
   ipar::context_t ctx{};
   ctx.role = role;
   ctx.system_id = system_id;
-  ctx.msg_par = msg_par;
-  ctx.msg_par_blocks = msg_par_blocks;
-  ctx.msg_com = msg_com;
-  ctx.msg_com_blocks = msg_com_blocks;
+  ctx.msg_prm = msg_prm;
+  ctx.msg_prm_blocks = msg_prm_blocks;
+  ctx.msg_cmd = msg_cmd;
+  ctx.msg_cmd_blocks = msg_cmd_blocks;
   return ctx;
 }
 

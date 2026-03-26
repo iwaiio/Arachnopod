@@ -8,5 +8,7 @@
 #define ALG_NONE                           0      /** алгоритм обработки                                                                  */
 #define ALG_AN                             1      /** AN                                                                                  */
 #define ALG_AC                             2      /** AC                                                                                  */
+#define ALG_ABC                            3      /** ABC                                                                                 */
+#define ALG_AAC                            4      /** AAC                                                                                 */
 
-#define ALG_max                            3      /**                                                                                     */
+#define ALG_max                            5      /**                                                                                     */

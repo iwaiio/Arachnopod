@@ -23,6 +23,7 @@ bool apply_bool_pair(const ipar::context_t& ctx,
     if (status != isim::status_t::ok) {
       call_status_hook(status_hook, user, binding, status);
     } else {
+      icmd::ICMDCLEAR(ctx, binding.cmd_id);
       changed = true;
     }
   }
@@ -32,6 +33,7 @@ bool apply_bool_pair(const ipar::context_t& ctx,
     if (status != isim::status_t::ok) {
       call_status_hook(status_hook, user, binding, status);
     } else {
+      icmd::ICMDCLEAR(ctx, binding.alt_cmd_id);
       changed = true;
     }
   }
@@ -43,17 +45,19 @@ bool apply_nonzero_value(const ipar::context_t& ctx,
                          const binding_t& binding,
                          const status_hook_t status_hook,
                          void* user) {
-  const std::int32_t value = icmd::ICMDVAL(ctx, binding.cmd_id, 0);
-  if (value == 0) {
+  if (!icmd::ICMDACT(ctx, binding.cmd_id)) {
     return false;
   }
 
-  const auto status = isim::ISIMSETI32(binding.param_id, value);
+  const float value = icmd::ICMDF32(ctx, binding.cmd_id, 0.0F);
+
+  const auto status = isim::ISIMSETF32(binding.param_id, value);
   if (status != isim::status_t::ok) {
     call_status_hook(status_hook, user, binding, status);
     return false;
   }
 
+  icmd::ICMDCLEAR(ctx, binding.cmd_id);
   return true;
 }
 

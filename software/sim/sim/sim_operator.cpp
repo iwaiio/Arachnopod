@@ -4,6 +4,7 @@
       Simulation models: CS, PSS, TCS, TMS, MNS, INM, DCM, NM, CVM, AM, LS.
 */
 
+#include <barrier>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -27,6 +28,12 @@
 namespace {
 
 std::atomic<bool> g_stop_requested{false};
+std::atomic<std::uint32_t> g_next_bus_tick{1U};
+constexpr std::ptrdiff_t k_bus_system_thread_count = 2;
+std::barrier g_system_start_barrier{k_bus_system_thread_count};
+std::barrier g_system_tick_barrier{k_bus_system_thread_count, []() noexcept {
+  mock_bus_tick(g_next_bus_tick.fetch_add(1U, std::memory_order_relaxed));
+}};
 
 void on_signal(int) {
   g_stop_requested.store(true, std::memory_order_relaxed);
@@ -104,6 +111,14 @@ void sleep_to_next_tick(const std::chrono::microseconds period,
   std::this_thread::sleep_until(next_wakeup);
 }
 
+void wait_system_tick_barrier() {
+  g_system_tick_barrier.arrive_and_wait();
+}
+
+void wait_system_start_barrier() {
+  g_system_start_barrier.arrive_and_wait();
+}
+
 void idle_worker_loop(const std::string_view name, const std::chrono::microseconds period) {
   init_thread_logger(normalize_module_name(name));
 
@@ -118,30 +133,34 @@ void idle_worker_loop(const std::string_view name, const std::chrono::microsecon
 
 void cs_worker_loop(const std::chrono::microseconds period) {
   cs::runtime_init();
-
+  wait_system_start_barrier();
   std::uint32_t tick = 0U;
   auto next_wakeup = std::chrono::steady_clock::now();
 
   while (!g_stop_requested.load(std::memory_order_relaxed)) {
     cs::runtime_step(tick);
     ++tick;
-
+    wait_system_tick_barrier();
     sleep_to_next_tick(period, next_wakeup);
   }
+
+  g_system_tick_barrier.arrive_and_drop();
 }
 
 void pss_worker_loop(const std::chrono::microseconds period) {
   pss::runtime_init();
-
+  wait_system_start_barrier();
   std::uint32_t tick = 0U;
   auto next_wakeup = std::chrono::steady_clock::now();
 
   while (!g_stop_requested.load(std::memory_order_relaxed)) {
     pss::runtime_step(tick);
     ++tick;
-
+    wait_system_tick_barrier();
     sleep_to_next_tick(period, next_wakeup);
   }
+
+  g_system_tick_barrier.arrive_and_drop();
 }
 
 void pss_sim_worker_loop(const std::chrono::microseconds period) {

@@ -1,17 +1,13 @@
 #include "cs_systems.hpp"
 
-#include "cs_nodes.hpp"
+#include "cs_systems_internal.hpp"
 
 namespace cs::systems {
 
 void reset() {}
 
 void step() {
-  nodes::tcs_step();
-  nodes::pss_step();
-  nodes::tms_step();
-  nodes::mns_step();
-  nodes::ls_step();
+  internal::run_node_step_order();
 }
 
 }  // namespace cs::systems

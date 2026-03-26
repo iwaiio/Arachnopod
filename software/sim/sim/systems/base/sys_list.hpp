@@ -12,6 +12,14 @@
 #define SYS_TMS                            4      /** id системы TMS                                                                      */
 #define SYS_MNS                            5      /** id системы MNS                                                                      */
 #define SYS_LS                             6      /** id системы LS                                                                       */
+#define CS_PARAM_STORAGE_BLOCKS            26     /** CS: storage blocks for parameters                                                   */
+#define CS_PARAM_STORAGE_BITS              416    /** CS: storage bit length for parameters                                               */
+#define CS_COMM_STORAGE_BLOCKS             16     /** CS: storage blocks for commands                                                     */
+#define CS_COMM_STORAGE_BITS               256    /** CS: storage bit length for commands                                                 */
+#define CS_PARAM_BUF_BLOCKS                15     /** CS: transport buffer blocks for parameters                                          */
+#define CS_PARAM_BUF_BITS                  240    /** CS: transport buffer bit length for parameters                                      */
+#define CS_COMM_BUF_BLOCKS                 8      /** CS: transport buffer blocks for commands                                            */
+#define CS_COMM_BUF_BITS                   128    /** CS: transport buffer bit length for commands                                        */
 #define CS_PARAM_MSG_BLOCKS                26     /** CS: max блоков параметров                                                           */
 #define CS_PARAM_MSG_BITS                  416    /** CS: max длина параметров, бит                                                       */
 #define CS_COMM_MSG_BLOCKS                 16     /** CS: max блоков команд                                                               */

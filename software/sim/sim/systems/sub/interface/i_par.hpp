@@ -30,10 +30,10 @@ enum class status_t : std::uint8_t {
 struct context_t {
   role_t role{role_t::device};
   std::uint8_t system_id{SYS_NONE};
-  std::uint16_t* msg_par{nullptr};
-  std::size_t msg_par_blocks{0};
-  std::uint16_t* msg_com{nullptr};
-  std::size_t msg_com_blocks{0};
+  std::uint16_t* msg_prm{nullptr};
+  std::size_t msg_prm_blocks{0};
+  std::uint16_t* msg_cmd{nullptr};
+  std::size_t msg_cmd_blocks{0};
 };
 
 struct parse_result_t {
@@ -41,19 +41,19 @@ struct parse_result_t {
   float value{0.0F};
 };
 
-// Bind thread-local context for wrappers IPAR(id)/IGEN(id, value).
+// Bind thread-local context for wrappers IMSGGET(id)/IMSGSET(id, value).
 void bind_context(const context_t* ctx);
 
 // Read currently bound thread-local context.
 const context_t* bound_context();
 
 // Parse incoming value by global identifier (ID from param_comm_list.hpp).
-parse_result_t IPAR(const context_t& ctx, std::uint16_t id);
-parse_result_t IPAR(std::uint16_t id);
+parse_result_t IMSGGET(const context_t& ctx, std::uint16_t id);
+parse_result_t IMSGGET(std::uint16_t id);
 
 // Generate outgoing value by global identifier.
-status_t IGEN(const context_t& ctx, std::uint16_t id, std::int32_t value = 1);
-status_t IGEN(std::uint16_t id, std::int32_t value = 1);
+status_t IMSGSET(const context_t& ctx, std::uint16_t id, float value = 1.0F);
+status_t IMSGSET(std::uint16_t id, float value = 1.0F);
 
 const char* to_string(status_t status);
 
